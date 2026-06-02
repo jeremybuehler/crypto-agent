@@ -1,0 +1,20 @@
+{
+  "name": "@agent/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@agent/core": "workspace:*",
+    "@agent/ai": "workspace:*",
+    "@agent/coinbase": "workspace:*",
+    "@agent/market-data": "workspace:*",
+    "@agent/persistence": "workspace:*",
+    "@agent/strategy": "workspace:*",
+    "@agent/risk": "workspace:*",
+    "@agent/execution": "workspace:*"
+  }
+}

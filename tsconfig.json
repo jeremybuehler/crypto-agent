@@ -1,0 +1,16 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/ai" },
+    { "path": "./packages/coinbase" },
+    { "path": "./packages/market-data" },
+    { "path": "./packages/strategy" },
+    { "path": "./packages/risk" },
+    { "path": "./packages/execution" },
+    { "path": "./packages/persistence" },
+    { "path": "./packages/backtest" },
+    { "path": "./apps/api" },
+    { "path": "./apps/worker" }
+  ]
+}

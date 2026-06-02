@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "baseUrl": ".",
+    "paths": {
+      "@agent/core": ["packages/core/src/index.ts"],
+      "@agent/ai": ["packages/ai/src/index.ts"],
+      "@agent/coinbase": ["packages/coinbase/src/index.ts"],
+      "@agent/market-data": ["packages/market-data/src/index.ts"],
+      "@agent/strategy": ["packages/strategy/src/index.ts"],
+      "@agent/risk": ["packages/risk/src/index.ts"],
+      "@agent/execution": ["packages/execution/src/index.ts"],
+      "@agent/persistence": ["packages/persistence/src/index.ts"],
+      "@agent/backtest": ["packages/backtest/src/index.ts"]
+    }
+  }
+}

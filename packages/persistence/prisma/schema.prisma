@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model TradeIntent {
+  id           String   @id
+  productId    String
+  side         String
+  quoteSizeUsd Decimal
+  confidence   Decimal
+  reasonCode   String
+  rationale    String
+  createdAt    DateTime
+  riskDecision RiskDecision?
+}
+
+model RiskDecision {
+  id          String      @id @default(uuid())
+  intentId    String      @unique
+  approved    Boolean
+  reasons     Json
+  ruleResults Json
+  checkedAt   DateTime
+  intent      TradeIntent @relation(fields: [intentId], references: [id])
+}
+
+model OrderRecord {
+  id            String   @id @default(uuid())
+  clientOrderId String   @unique
+  coinbaseOrderId String?
+  productId     String
+  side          String
+  status        String
+  requestJson   Json
+  responseJson  Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model FillRecord {
+  id        String   @id
+  orderId   String
+  productId String
+  side      String
+  baseSize  Decimal
+  price     Decimal
+  feeUsd    Decimal
+  filledAt  DateTime
+}
+
+model OpsEvent {
+  id        String   @id @default(uuid())
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+}

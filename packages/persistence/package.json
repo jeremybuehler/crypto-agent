@@ -1,0 +1,17 @@
+{
+  "name": "@agent/persistence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@agent/core": "workspace:*",
+    "@agent/ai": "workspace:*",
+    "@agent/execution": "workspace:*",
+    "pg": "^8.13.1"
+  }
+}
