@@ -5,5 +5,13 @@
     "rootDir": "src",
     "outDir": "dist"
   },
+  "references": [
+    { "path": "../ai" },
+    { "path": "../core" },
+    { "path": "../execution" },
+    { "path": "../market-data" },
+    { "path": "../risk" },
+    { "path": "../strategy" }
+  ],
   "include": ["src/**/*.ts"]
 }

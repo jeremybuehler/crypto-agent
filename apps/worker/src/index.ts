@@ -1,4 +1,4 @@
-import { ConservativeStubAIContextProvider } from "@agent/ai";
+import { ClaudeAIContextProvider, ConservativeStubAIContextProvider, type AIContextProvider } from "@agent/ai";
 import { CoinbasePublicMarketData } from "@agent/coinbase";
 import { loadConfig, logger, type MarketSnapshot, type PortfolioState } from "@agent/core";
 import { PaperBroker } from "@agent/execution";
@@ -24,7 +24,9 @@ export async function runOnce(portfolio: PortfolioState = initialPortfolio): Pro
   await persistence.saveMarketSnapshot(market);
 
   const features = computeFeatures(candles, market);
-  const aiProvider = new ConservativeStubAIContextProvider();
+  const aiProvider: AIContextProvider = config.anthropicApiKey
+    ? new ClaudeAIContextProvider(config.anthropicApiKey)
+    : new ConservativeStubAIContextProvider();
   const aiContextInput = {
     productId: market.productId,
     timeframe: "1m",

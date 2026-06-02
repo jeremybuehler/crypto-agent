@@ -1,13 +1,21 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { loadConfig, logger } from "@agent/core";
+import { createOpsState, type OpsState } from "@agent/risk";
 
 const config = loadConfig();
 const app = Fastify({ loggerInstance: logger });
-let paused = false;
-let killSwitchEnabled = false;
+let opsState: OpsState;
 
 await app.register(cors);
+
+app.addHook("onReady", async () => {
+  opsState = await createOpsState(config.redisUrl);
+});
+
+app.addHook("onClose", async () => {
+  await opsState?.close();
+});
 
 app.get("/health", async () => ({
   ok: true,
@@ -19,32 +27,32 @@ app.get("/health", async () => ({
 app.get("/status", async () => ({
   mode: config.tradingMode,
   enabledProducts: config.enabledProducts,
-  paused,
-  killSwitchEnabled,
+  paused: await opsState.getPaused(),
+  killSwitchEnabled: await opsState.getKillSwitchEnabled(),
   risk: config.risk
 }));
 
 app.post("/ops/pause", async () => {
-  paused = true;
-  return { paused };
+  await opsState.setPaused(true);
+  return { paused: true };
 });
 
 app.post("/ops/resume", async () => {
-  paused = false;
-  return { paused };
+  await opsState.setPaused(false);
+  return { paused: false };
 });
 
 app.post("/ops/kill-switch", async () => {
-  killSwitchEnabled = true;
-  return { killSwitchEnabled };
+  await opsState.setKillSwitchEnabled(true);
+  return { killSwitchEnabled: true };
 });
 
 app.post("/ops/clear-kill-switch", async () => {
   if (config.tradingMode === "live") {
-    throw new Error("Refusing to clear kill switch through scaffold API in live mode.");
+    throw new Error("Refusing to clear kill switch in live mode.");
   }
-  killSwitchEnabled = false;
-  return { killSwitchEnabled };
+  await opsState.setKillSwitchEnabled(false);
+  return { killSwitchEnabled: false };
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {

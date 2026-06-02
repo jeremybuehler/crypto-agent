@@ -1,17 +1,21 @@
 import type { AIContext } from "@agent/ai";
-import type { AgentConfig, PortfolioState, TradeIntent } from "@agent/core";
+import type { AgentConfig, Clock, PortfolioState, TradeIntent } from "@agent/core";
+import { SystemClock } from "@agent/core";
 import type { FeatureSnapshot } from "@agent/market-data";
 import { randomUUID } from "node:crypto";
+
+export const STRATEGY_VERSION = "ai-assisted-trend-v1";
 
 export interface StrategyInput {
   config: AgentConfig;
   features: FeatureSnapshot;
   aiContext: AIContext;
   portfolio: PortfolioState;
+  clock?: Clock;
 }
 
 export function aiAssistedTrendStrategy(input: StrategyInput): TradeIntent | null {
-  const { config, features, aiContext, portfolio } = input;
+  const { config, features, aiContext, portfolio, clock = SystemClock } = input;
 
   if (aiContext.doNotTrade) return null;
   if (features.spreadBps > 15) return null;
@@ -30,7 +34,8 @@ export function aiAssistedTrendStrategy(input: StrategyInput): TradeIntent | nul
       confidence: Math.min(0.7, 0.4 + aiContext.confidence / 2),
       reasonCode: "trend_pullback_confirmed",
       rationale: "Fast trend is above slow trend, momentum is positive, and AI context did not block trading.",
-      createdAt: new Date()
+      strategyVersion: STRATEGY_VERSION,
+      createdAt: clock.now()
     };
   }
 
@@ -43,7 +48,8 @@ export function aiAssistedTrendStrategy(input: StrategyInput): TradeIntent | nul
       confidence: 0.65,
       reasonCode: "trend_reversal_reduce",
       rationale: "Fast trend is below slow trend and momentum has turned negative, so reduce existing exposure.",
-      createdAt: new Date()
+      strategyVersion: STRATEGY_VERSION,
+      createdAt: clock.now()
     };
   }
 

@@ -7,5 +7,13 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -b"
+  },
+  "dependencies": {
+    "@agent/ai": "workspace:*",
+    "@agent/core": "workspace:*",
+    "@agent/execution": "workspace:*",
+    "@agent/market-data": "workspace:*",
+    "@agent/risk": "workspace:*",
+    "@agent/strategy": "workspace:*"
   }
 }

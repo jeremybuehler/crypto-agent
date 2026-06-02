@@ -152,9 +152,10 @@ export function buildTradeIntentInsert(intent: TradeIntent) {
         confidence,
         reason_code,
         rationale,
+        strategy_version,
         created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (id) DO NOTHING
     `,
     values: [
@@ -165,6 +166,7 @@ export function buildTradeIntentInsert(intent: TradeIntent) {
       intent.confidence,
       intent.reasonCode,
       intent.rationale,
+      intent.strategyVersion,
       intent.createdAt
     ]
   };

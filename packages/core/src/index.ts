@@ -37,6 +37,8 @@ const envSchema = z.object({
   ALLOW_LEVERAGE: booleanFromEnv.default("false"),
   REQUIRE_ORDER_PREVIEW: booleanFromEnv.default("true"),
   LIVE_TRADING_ACK: booleanFromEnv.default("false"),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  REDIS_URL: z.string().optional(),
   COINBASE_API_KEY_NAME: z.string().optional(),
   COINBASE_API_PRIVATE_KEY: z.string().optional(),
   COINBASE_REST_BASE_URL: z.string().url().default("https://api.coinbase.com/api/v3/brokerage"),
@@ -68,7 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error("PERSISTENCE_ENABLED=true requires DATABASE_URL.");
   }
 
-  return {
+  const config = {
     nodeEnv: parsed.NODE_ENV,
     logLevel: parsed.LOG_LEVEL,
     tradingMode: parsed.TRADING_MODE,
@@ -84,6 +86,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       allowLeverage: parsed.ALLOW_LEVERAGE,
       requireOrderPreview: parsed.REQUIRE_ORDER_PREVIEW
     },
+    anthropicApiKey: parsed.ANTHROPIC_API_KEY,
+    redisUrl: parsed.REDIS_URL,
     coinbase: {
       apiKeyName: parsed.COINBASE_API_KEY_NAME,
       apiPrivateKey: parsed.COINBASE_API_PRIVATE_KEY,
@@ -96,7 +100,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     },
     port: parsed.PORT
   };
+  return deepFreeze(config);
 }
+
+function deepFreeze<T>(obj: T): T {
+  Object.freeze(obj);
+  for (const value of Object.values(obj as object)) {
+    if (value && typeof value === "object") deepFreeze(value);
+  }
+  return obj;
+}
+
+export interface Clock {
+  now(): Date;
+}
+
+export const SystemClock: Clock = { now: () => new Date() };
 
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? "info",
@@ -138,6 +157,7 @@ export interface TradeIntent {
   confidence: number;
   reasonCode: string;
   rationale: string;
+  strategyVersion: string;
   createdAt: Date;
 }
 

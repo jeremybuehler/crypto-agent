@@ -19,8 +19,8 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonom
 - **Files to touch:** `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `.gitignore`, `.editorconfig`, `.nvmrc`
 - **Scope:** Initialize pnpm workspace with packages and apps directories per [CLAUDE.md §"Repository layout"]. Configure TypeScript strict mode (no implicit any, strict null checks). Set up Vitest at the root.
 - **Acceptance:**
-  - [ ] `pnpm install` succeeds on a clean clone
-  - [ ] `pnpm typecheck` and `pnpm test` exit 0 with no test files yet
+  - [x] `pnpm install` succeeds on a clean clone
+  - [x] `pnpm typecheck` and `pnpm test` exit 0 with no test files yet
   - [ ] Empty package stubs (`packages/core`, `packages/coinbase`, `packages/market-data`, `packages/strategy`, `packages/ai`, `packages/risk`, `packages/execution`, `packages/persistence`, `packages/backtest`) each export a placeholder `version` const
 
 ### T1.2 — Core types and errors
@@ -37,27 +37,27 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonom
 - **Files to touch:** `packages/core/src/config.ts`, `packages/core/src/config.test.ts`, `.env.example`
 - **Scope:** Implement Zod-validated `loadConfig()` per [TECH_SPEC.md §3]. Including the two `.refine()` guards for live mode.
 - **Acceptance:**
-  - [ ] Valid paper-mode env passes
-  - [ ] Live mode without `LIVE_TRADING_ACK=true` fails with a clear error
-  - [ ] Live mode with `MAX_TRADE_NOTIONAL_USD > 50` fails with a clear error
-  - [ ] Missing required vars fail with a clear error per field
-  - [ ] Returned object is `Object.freeze`d
+  - [x] Valid paper-mode env passes
+  - [x] Live mode without `LIVE_TRADING_ACK=true` fails with a clear error
+  - [x] Live mode with `MAX_TRADE_NOTIONAL_USD > 50` fails with a clear error
+  - [x] Missing required vars fail with a clear error per field
+  - [x] Returned object is `Object.freeze`d
 
 ### T1.4 — Logger and time helpers
 - **Depends on:** T1.2
 - **Files to touch:** `packages/core/src/logger.ts`, `packages/core/src/time.ts`, tests
 - **Scope:** pino logger with correlationId mixin. Time helpers: `now()`, `secondsBetween()`, a `Clock` interface for test injection.
 - **Acceptance:**
-  - [ ] Logger emits valid JSON with required fields
-  - [ ] `Clock` interface allows freezing time in tests
+  - [x] Logger emits valid JSON with required fields
+  - [x] `Clock` interface allows freezing time in tests
 
 ### T1.5 — Docker Compose for Postgres + Redis
 - **Depends on:** none (can run in parallel with T1.1)
 - **Files to touch:** `infra/docker-compose.yml`, `infra/README.md`
 - **Scope:** Postgres 15, Redis 7, named volumes, health checks, exposed ports.
 - **Acceptance:**
-  - [ ] `docker compose -f infra/docker-compose.yml up -d` brings both services healthy in < 30s
-  - [ ] Down + up preserves data
+  - [x] `docker compose -f infra/docker-compose.yml up -d` brings both services healthy in < 30s
+  - [x] Down + up preserves data
 
 ### T1.6 — Drizzle schema and migrations
 - **Depends on:** T1.3, T1.5
@@ -94,17 +94,17 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonom
 - **Files to touch:** `packages/market-data/src/features.ts`, `packages/market-data/src/features.test.ts`
 - **Scope:** Implement `computeFeatures` per [TECH_SPEC.md §5.2]. Pure function.
 - **Acceptance:**
-  - [ ] Tests verify each feature against known-output fixtures
-  - [ ] No I/O, no `Date.now()` calls inside
+  - [x] Tests verify each feature against known-output fixtures
+  - [x] No I/O, no `Date.now()` calls inside
 
 ### T2.3 — AI context agent
 - **Depends on:** T2.2, T1.3
 - **Files to touch:** `packages/ai/src/llm-client.ts`, `packages/ai/src/context-agent.ts`, `packages/ai/src/prompts/market-context.ts`, `packages/ai/src/build-input.ts`, tests
 - **Scope:** Per [TECH_SPEC.md §5.3, §6]. `LLMClient` is a thin provider-neutral interface; first implementation uses Anthropic SDK. `buildAIContextInput` is the secret-stripping whitelist function.
 - **Acceptance:**
-  - [ ] `buildAIContextInput` strips everything not in the whitelist (test enforces this with object key comparison)
-  - [ ] Schema parse failures produce a `{ doNotTrade: true, ... }` context, not an exception
-  - [ ] Persists row in `ai_contexts` for every call
+  - [x] `buildAIContextInput` strips everything not in the whitelist (test enforces this with object key comparison)
+  - [x] Schema parse failures produce a `{ doNotTrade: true, ... }` context, not an exception
+  - [x] Persists row in `ai_contexts` for every call
   - [ ] Static check fails CI if any string template in `prompts/` references a denylisted variable name (`apiKey`, `privateKey`, `jwt`, `accountId`, etc.)
 
 ### T2.4 — Deterministic strategy: ai-assisted-trend
@@ -112,38 +112,38 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonom
 - **Files to touch:** `packages/strategy/src/strategy-engine.ts`, `packages/strategy/src/strategies/ai-assisted-trend.ts`, tests
 - **Scope:** Per [TECH_SPEC.md §5.4] and architecture doc §"Deterministic strategy example".
 - **Acceptance:**
-  - [ ] Returns `hold` when `aiContext.doNotTrade === true`
-  - [ ] Returns `hold` when spread, volatility, or daily PnL guards trip
-  - [ ] Returns `enter` only when all positive conditions stack
-  - [ ] Strategy version string is stamped on every intent
-  - [ ] Fixture tests cover the full decision matrix
+  - [x] Returns `hold` when `aiContext.doNotTrade === true`
+  - [x] Returns `hold` when spread, volatility, or daily PnL guards trip
+  - [x] Returns `enter` only when all positive conditions stack
+  - [x] Strategy version string is stamped on every intent
+  - [x] Fixture tests cover the full decision matrix
 
 ### T2.5 — Risk engine
 - **Depends on:** T1.3
 - **Files to touch:** `packages/risk/src/risk-engine.ts`, `packages/risk/src/policies.ts`, `packages/risk/src/rules/*.ts`, tests
 - **Scope:** Per [TECH_SPEC.md §5.5]. One rule per file, each a pure function.
 - **Acceptance:**
-  - [ ] Unit tests for each rule (positive + negative cases)
-  - [ ] **Property tests** (fast-check): generate arbitrary intents + portfolios; assert the engine never approves when any single rule would reject
-  - [ ] `RiskDecision.ruleResults` includes a row for every rule (even passing ones, for audit)
+  - [x] Unit tests for each rule (positive + negative cases)
+  - [x] **Property tests** (fast-check): generate arbitrary intents + portfolios; assert the engine never approves when any single rule would reject
+  - [x] `RiskDecision.ruleResults` includes a row for every rule (even passing ones, for audit)
 
 ### T2.6 — Ops control service
 - **Depends on:** T1.5, T1.7
 - **Files to touch:** `packages/risk/src/ops-control.ts`, tests
 - **Scope:** Per [TECH_SPEC.md §5.8]. Dual write Redis + Postgres.
 - **Acceptance:**
-  - [ ] Activating kill switch is visible in next Redis read in < 100ms
+  - [x] Activating kill switch is visible in next Redis read in < 100ms
   - [ ] Redis flush still leaves Postgres state intact and a follow-up read repopulates Redis
-  - [ ] Live-mode API call to clear kill switch is refused (verified with tests)
+  - [x] Live-mode API call to clear kill switch is refused (verified with tests)
 
 ### T2.7 — Trading loop (paper mode)
 - **Depends on:** T2.1, T2.2, T2.3, T2.4, T2.5, T2.6, T1.7
 - **Files to touch:** `apps/worker/src/loop.ts`, `apps/worker/src/index.ts`, tests
 - **Scope:** Implement the loop per [TECH_SPEC.md §9]. Pull all pieces together. Persist the full audit chain per [PRD §G2].
 - **Acceptance:**
-  - [ ] `pnpm paper:once` runs one tick and exits 0
+  - [x] `pnpm paper:once` runs one tick and exits 0
   - [ ] After a run, all of `market_snapshots`, `feature_snapshots`, `ai_contexts`, `trade_intents`, `risk_decisions` have new rows for the run's correlationId
-  - [ ] If risk approves, `paper_fills` has a new row
+  - [x] If risk approves, `paper_fills` has a new row
   - [ ] Loop respects pause and kill switch (integration test)
 
 ### T2.8 — Backtest runner
@@ -151,9 +151,9 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonom
 - **Files to touch:** `packages/backtest/src/backtest-runner.ts`, `packages/backtest/src/simulator.ts`, `packages/backtest/bin/backtest.ts`
 - **Scope:** Per [TECH_SPEC.md §11]. Reuses the same `Strategy` and `RiskEngine` instances as production.
 - **Acceptance:**
-  - [ ] CLI runs against a fixture CSV and prints a report
-  - [ ] Report includes PnL, max drawdown, Sharpe, win rate, trade count
-  - [ ] Identical strategy code in backtest as in worker (verified by importing the same module)
+  - [x] CLI runs against a fixture CSV and prints a report
+  - [x] Report includes PnL, max drawdown, Sharpe, win rate, trade count
+  - [x] Identical strategy code in backtest as in worker (verified by importing the same module)
 
 ---
 

@@ -13,7 +13,8 @@
     { "path": "../../packages/persistence" },
     { "path": "../../packages/strategy" },
     { "path": "../../packages/risk" },
-    { "path": "../../packages/execution" }
+    { "path": "../../packages/execution" },
+    { "path": "../../packages/backtest" }
   ],
   "include": ["src/**/*.ts"]
 }

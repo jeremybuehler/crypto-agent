@@ -14,7 +14,8 @@ export default defineConfig({
       "@agent/strategy": new URL("./packages/strategy/src/index.ts", import.meta.url).pathname,
       "@agent/risk": new URL("./packages/risk/src/index.ts", import.meta.url).pathname,
       "@agent/execution": new URL("./packages/execution/src/index.ts", import.meta.url).pathname,
-      "@agent/persistence": new URL("./packages/persistence/src/index.ts", import.meta.url).pathname
+      "@agent/persistence": new URL("./packages/persistence/src/index.ts", import.meta.url).pathname,
+      "@agent/backtest": new URL("./packages/backtest/src/index.ts", import.meta.url).pathname
     }
   }
 });

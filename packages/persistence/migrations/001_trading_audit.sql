@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS trade_intents (
   confidence NUMERIC(6, 5) NOT NULL,
   reason_code TEXT NOT NULL,
   rationale TEXT NOT NULL,
+  strategy_version TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL
 );
 

@@ -1,4 +1,5 @@
 import type { AgentConfig, PortfolioState, RiskDecision, TradeIntent } from "@agent/core";
+export { InMemoryOpsState, RedisOpsState, createOpsState, type OpsState } from "./ops-state.js";
 
 export interface RiskInput {
   config: AgentConfig;

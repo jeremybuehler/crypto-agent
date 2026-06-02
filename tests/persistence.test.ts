@@ -68,6 +68,7 @@ describe("persistence query builders", () => {
       confidence: 0.7,
       reasonCode: "test",
       rationale: "test",
+      strategyVersion: "ai-assisted-trend-v1",
       createdAt: new Date("2026-05-25T13:00:00.000Z")
     };
     const decision: RiskDecision = {

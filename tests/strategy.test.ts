@@ -77,4 +77,83 @@ describe("ai assisted trend strategy", () => {
 
     expect(intent).toBeNull();
   });
+
+  it("returns null when spread is too wide", () => {
+    const intent = aiAssistedTrendStrategy({
+      config,
+      portfolio,
+      aiContext,
+      features: {
+        productId: "BTC-USD",
+        generatedAt: new Date(),
+        close: 102,
+        smaFast: 101,
+        smaSlow: 100,
+        momentumPct: 2,
+        volatilityPercentile: 30,
+        spreadBps: 20
+      }
+    });
+    expect(intent).toBeNull();
+  });
+
+  it("returns null when volatility is too high", () => {
+    const intent = aiAssistedTrendStrategy({
+      config,
+      portfolio,
+      aiContext,
+      features: {
+        productId: "BTC-USD",
+        generatedAt: new Date(),
+        close: 102,
+        smaFast: 101,
+        smaSlow: 100,
+        momentumPct: 2,
+        volatilityPercentile: 85,
+        spreadBps: 5
+      }
+    });
+    expect(intent).toBeNull();
+  });
+
+  it("creates a sell intent when trend reverses and a position exists", () => {
+    const intent = aiAssistedTrendStrategy({
+      config,
+      portfolio: {
+        ...portfolio,
+        positions: [{ productId: "BTC-USD", baseSize: 0.1, notionalUsd: 10, exposurePct: 1, averageEntryPrice: 100 }]
+      },
+      aiContext,
+      features: {
+        productId: "BTC-USD",
+        generatedAt: new Date(),
+        close: 96,
+        smaFast: 97,
+        smaSlow: 100,
+        momentumPct: -1,
+        volatilityPercentile: 30,
+        spreadBps: 5
+      }
+    });
+    expect(intent?.side).toBe("SELL");
+  });
+
+  it("returns null when trend is flat (no positive or negative signal)", () => {
+    const intent = aiAssistedTrendStrategy({
+      config,
+      portfolio,
+      aiContext,
+      features: {
+        productId: "BTC-USD",
+        generatedAt: new Date(),
+        close: 100,
+        smaFast: 100,
+        smaSlow: 100,
+        momentumPct: 0,
+        volatilityPercentile: 30,
+        spreadBps: 5
+      }
+    });
+    expect(intent).toBeNull();
+  });
 });

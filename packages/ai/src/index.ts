@@ -25,6 +25,8 @@ export interface AIContextProvider {
   generateContext(input: AIContextInput): Promise<AIContext>;
 }
 
+export { ClaudeAIContextProvider } from "./claude-provider.js";
+
 export class ConservativeStubAIContextProvider implements AIContextProvider {
   async generateContext(input: AIContextInput): Promise<AIContext> {
     const volatility = Number(input.features.volatilityPercentile ?? 100);

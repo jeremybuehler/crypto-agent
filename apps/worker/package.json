@@ -10,6 +10,7 @@
   "dependencies": {
     "@agent/core": "workspace:*",
     "@agent/ai": "workspace:*",
+    "@agent/backtest": "workspace:*",
     "@agent/coinbase": "workspace:*",
     "@agent/market-data": "workspace:*",
     "@agent/persistence": "workspace:*",

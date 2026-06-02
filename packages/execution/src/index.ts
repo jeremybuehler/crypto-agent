@@ -1,4 +1,5 @@
-import type { MarketSnapshot, PortfolioState, RiskDecision } from "@agent/core";
+import type { Clock, MarketSnapshot, PortfolioState, RiskDecision } from "@agent/core";
+import { SystemClock } from "@agent/core";
 import { randomUUID } from "node:crypto";
 
 export interface SimulatedFill {
@@ -13,7 +14,11 @@ export interface SimulatedFill {
 }
 
 export class PaperBroker {
-  constructor(private readonly feeRate = 0.006, private readonly slippageBps = 10) {}
+  constructor(
+    private readonly feeRate = 0.006,
+    private readonly slippageBps = 10,
+    private readonly clock: Clock = SystemClock
+  ) {}
 
   execute(decision: RiskDecision, market: MarketSnapshot, portfolio: PortfolioState): { fill: SimulatedFill; portfolio: PortfolioState } {
     if (!decision.approved) {
@@ -51,7 +56,7 @@ export class PaperBroker {
         price,
         baseSize,
         feeUsd,
-        filledAt: new Date()
+        filledAt: this.clock.now()
       },
       portfolio: {
         ...portfolio,
