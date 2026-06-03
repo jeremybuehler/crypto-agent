@@ -10,6 +10,7 @@
     "test": "vitest run",
     "dev:api": "tsx apps/api/src/index.ts",
     "dev:worker": "tsx apps/worker/src/index.ts",
+    "dev:dashboard": "cd apps/dashboard && pnpm dev",
     "paper:once": "tsx apps/worker/src/index.ts --once",
     "db:migrate": "tsx scripts/migrate.ts",
     "backtest": "tsx apps/worker/src/backtest.ts"

@@ -75,6 +75,29 @@ export async function runOnce(portfolio: PortfolioState = initialPortfolio): Pro
   const result = broker.execute(decision, market, portfolio);
   await persistence.savePaperFill({ tradeIntentId: intent.id, fill: result.fill });
   logger.info({ intent, decision, fill: result.fill, portfolio: result.portfolio }, "Paper trade executed.");
+
+  const apiUrl = process.env.AGENT_API_URL;
+  if (apiUrl) {
+    await fetch(`${apiUrl}/internal/fill`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trade: {
+          id: result.fill.fillId,
+          productId: result.fill.productId,
+          side: result.fill.side,
+          quoteSizeUsd: result.fill.quoteSizeUsd,
+          price: result.fill.price,
+          baseSize: result.fill.baseSize,
+          feeUsd: result.fill.feeUsd,
+          strategyVersion: intent.strategyVersion,
+          filledAt: result.fill.filledAt.toISOString()
+        },
+        portfolio: result.portfolio
+      })
+    }).catch(() => {});
+  }
+
   return result.portfolio;
 }
 
