@@ -18,7 +18,7 @@ The model is advisory. It has no exchange credential, order, approval, database,
 |---|---|---|
 | Browser → dashboard server | Local session/ingress policy | Render and request operator workflows |
 | Dashboard server → operator API | `OPERATOR_API_TOKEN` bearer | Read operator data and request audited operator actions |
-| Worker → internal API | distinct `INTERNAL_API_TOKEN` bearer | Ingest heartbeat and validated internal events only |
+| Worker → internal API | distinct `INTERNAL_API_TOKEN` via the dedicated `x-internal-token` header (never the operator `Authorization: Bearer` header) | Ingest heartbeat and validated internal events only |
 | API/worker → Postgres | private connection, least-privilege role | Durable authoritative state |
 | API/worker → Redis | private connection, authenticated when remote | Ephemeral operational coordination |
 | Worker → Coinbase | request-scoped 120-second JWT | Exact configured view/trade permissions |
