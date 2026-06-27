@@ -7,5 +7,16 @@
 - [ ] `MAX_TRADE_NOTIONAL_USD` is intentionally tiny.
 - [ ] Kill switch has been tested.
 - [ ] Alerting is configured for every live order.
+- [ ] Approval API/dashboard requires authenticated operator identity.
+- [ ] Missing, expired, reused, rejected, and preview-mismatched approvals have been tested to fail closed.
+- [ ] Approval TTL is configured and the operator can see preview details, fees/slippage, rationale, and expiry.
+- [ ] Personalized advice shows the profile version and evidence used.
+- [ ] Profile view, correction, export, and deletion controls have been tested.
+- [ ] Learned strategy/risk changes require a separate approval and rollback plan.
+- [ ] Memory retention periods are configured and secrets are excluded from learning inputs.
+- [ ] Prompt-injection evals prove untrusted content cannot mutate profile, policy, or approval state.
+- [ ] Approval, rejection, pause, cancellation, and kill-switch flows pass keyboard-only and screen-reader checks.
+- [ ] Stale/degraded data is unmistakable without relying on color, and approval is blocked where required.
+- [ ] Supported dashboard breakpoints pass visual-regression and critical-flow end-to-end tests.
 - [ ] Operator accepts that this system can lose money.
 - [ ] `LIVE_TRADING_ACK=true` is set only for the deployment intended to trade.

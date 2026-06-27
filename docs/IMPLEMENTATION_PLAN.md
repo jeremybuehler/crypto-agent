@@ -1,4 +1,4 @@
-# Implementation Plan: ACT v1
+# Implementation Plan: Crypto Guy v1
 
 Phase-by-phase ticket list for Claude Code. Each ticket is sized to fit in one focused working session and ends with explicit acceptance criteria.
 
@@ -8,7 +8,7 @@ Phase-by-phase ticket list for Claude Code. Each ticket is sized to fit in one f
 3. Run `pnpm typecheck && pnpm test`. If green, check the box and update [PRD.md](./PRD.md) §"Success metrics" if applicable.
 4. Move to the next.
 
-Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonomous_crypto_trading_agent_architecture.md](./autonomous_crypto_trading_agent_architecture.md) · [CLAUDE.md](./CLAUDE.md)
+Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [crypto-guy-architecture.md](./crypto-guy-architecture.md) · [CLAUDE.md](./CLAUDE.md)
 
 ---
 
@@ -155,6 +155,49 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonom
   - [x] Report includes PnL, max drawdown, Sharpe, win rate, trade count
   - [x] Identical strategy code in backtest as in worker (verified by importing the same module)
 
+### T2.9 — Versioned operator profile and learning repository
+- **Depends on:** T1.7
+- **Files to touch:** `packages/learning/src/profile.ts`, `packages/learning/src/learning-item.ts`, `packages/persistence/src/schema.ts`, repositories, tests
+- **Scope:** Implement the contracts and precedence rules in [TECH_SPEC.md §6.1](./TECH_SPEC.md). Store explicit facts separately from reviewable inferences with provenance, confidence, scope, retention, and deletion state.
+- **Acceptance:**
+  - [ ] Explicit facts override derived insights deterministically
+  - [ ] Conflicts produce review items rather than silent overwrites
+  - [ ] Inspect, correct, accept, reject, export, and delete flows pass integration tests
+  - [ ] Secrets and denylisted credential fields are rejected and redacted
+  - [ ] Learning-store failure does not block pause, kill-switch, or cancellation
+
+### T2.10 — Adaptive education service
+- **Depends on:** T2.9, T2.3
+- **Files to touch:** `packages/learning/src/education-service.ts`, schemas, prompts, fixtures, tests
+- **Scope:** Generate structured “what, how, why, risks, example, limitations, check” lessons adapted to accepted education progress.
+- **Acceptance:**
+  - [ ] Schema validation and deterministic fallback tests pass
+  - [ ] Incorrect or uncertain answers do not become accepted facts automatically
+  - [ ] Education progress cannot call execution or policy mutation interfaces
+  - [ ] Golden evals cover beginner through advanced explanations and misleading-certainty failures
+
+### T2.11 — Profile-aware advice and decision journal
+- **Depends on:** T2.9, T2.10, T2.4
+- **Files to touch:** `packages/learning/src/advice-service.ts`, `packages/learning/src/decision-journal.ts`, API routes, tests, evals
+- **Scope:** Implement [TECH_SPEC.md §6.2](./TECH_SPEC.md) for U.S.-based personal use. Persist profile version, evidence, assumptions, contrary signals, alternatives, downside, invalidation conditions, operator response, and outcome.
+- **Acceptance:**
+  - [ ] Missing/conflicting/stale profile falls back to general education
+  - [ ] Stale market data blocks current-market advice
+  - [ ] Every personalized response identifies profile factors and evidence used
+  - [ ] Advice cannot produce executable orders or bypass deterministic risk
+  - [ ] Behavioral evals cover unsupported claims, omitted risks, profile misuse, and prompt injection
+
+### T2.12 — Learned strategy/risk change proposals
+- **Depends on:** T2.9, T2.11, T2.5
+- **Files to touch:** `packages/learning/src/change-proposal.ts`, persistence repository, authenticated API routes, tests
+- **Scope:** Convert learning into immutable strategy/risk proposals per [TECH_SPEC.md §6.3](./TECH_SPEC.md). Never apply changes automatically.
+- **Acceptance:**
+  - [ ] Exact proposal hash and current policy/strategy version are validated
+  - [ ] Missing, stale, rejected, mismatched, or reused approval changes nothing
+  - [ ] Concurrent apply attempts produce at most one version change
+  - [ ] Approved changes include tests, expected impact, downside, and rollback criteria
+  - [ ] Change approval cannot be reused as order approval
+
 ---
 
 ## Phase 3: Coinbase sandbox
@@ -233,17 +276,34 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonom
   - [ ] `/metrics` endpoint serves Prometheus format
   - [ ] All metrics listed in §12 are emitted in a representative run
 
+### T4.5 — Premium operator dashboard and design system
+- **Depends on:** T4.3, T2.9, T2.10, T2.11
+- **Files to touch:** `apps/dashboard/src/app/*`, `apps/dashboard/src/components/*`, shared tokens/components, browser and visual tests
+- **Scope:** Delete the existing dashboard UI and rebuild it cleanly according to [the clean-slate dashboard plan](./plans/2026-06-19-crypto-guy-dashboard-rebuild-plan.md) and [TECH_SPEC.md §7.1](./TECH_SPEC.md). Preserve validated API behavior, not the legacy component hierarchy or terminal visual design.
+- **Acceptance:**
+  - [ ] Shared tokens and primitives cover typography, spacing, color, focus, motion, layout, feedback, and charts
+  - [ ] Every data surface has loading, empty, stale, degraded, error, retry, disabled, and read-only states
+  - [ ] Core workflows pass automated WCAG 2.2 AA checks, keyboard-only review, screen-reader smoke tests, reduced-motion review, and 200% zoom
+  - [ ] Desktop/tablet breakpoints preserve safety controls and material proposal information
+  - [ ] LCP ≤ 2.5s, INP ≤ 200ms, CLS ≤ 0.1 in the documented test profile
+  - [ ] Visual-regression and browser end-to-end tests cover education, profile, advice, order approval/rejection, change approval/rejection, pause, cancellation, and kill switch
+  - [ ] External and LLM-authored content is sanitized and cannot render executable HTML
+
 ---
 
 ## Phase 5: Live micro-orders
 
-### T5.1 — ExecutionService live path
+### T5.1 — Interactive approval and ExecutionService live path
 - **Depends on:** T3.2, T2.5, T4.2
-- **Files to touch:** `packages/execution/src/order-preview.ts`, `packages/execution/src/execution-engine.ts`, tests
-- **Scope:** Per [TECH_SPEC.md §5.6]. Always preview when `requireOrderPreview=true`. Idempotency via `clientOrderId`.
+- **Files to touch:** `packages/execution/src/order-preview.ts`, `packages/execution/src/approval-service.ts`, `packages/execution/src/execution-engine.ts`, persistence schema/repository, API routes, tests
+- **Scope:** Per [TECH_SPEC.md §5.6-5.7] and [INTERACTION_POLICY.md](./INTERACTION_POLICY.md). Always preview when `requireOrderPreview=true`. Persist a proposal and require a single-use operator approval before live submission. Idempotency via `clientOrderId`.
 - **Acceptance:**
   - [ ] Preview-rejected orders never reach `createOrder`
   - [ ] `clientOrderId` is generated and persisted BEFORE network call
+  - [ ] Live proposals stop in `awaiting_operator_approval`; no background path submits them
+  - [ ] Missing, expired, reused, rejected, malformed, and hash-mismatched approvals never reach `createOrder`
+  - [ ] Approval claim/consumption is concurrency-safe and audit-attributed
+  - [ ] Paper and sandbox behavior remains automated
   - [ ] Sandbox integration test exercises preview → create → cancel happy path
 
 ### T5.2 — Alerts
@@ -262,11 +322,12 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonom
 - **Acceptance:**
   - [ ] `pnpm live:preflight` runs every checklist item and prints pass/fail
   - [ ] Any fail blocks startup in live mode
+  - [ ] Preflight proves the operator approval path is authenticated and fails closed
 
 ### T5.4 — First live micro-order rollout
 - **Depends on:** T5.3, all of Phase 4
 - **Files to touch:** none (operational)
-- **Scope:** Operator runs the system in live mode with bootstrap notional ($25). Reviews logs and PnL daily.
+- **Scope:** Operator runs the system in live mode with bootstrap notional ($25), explicitly reviews every proposal, and reviews logs and PnL daily.
 - **Acceptance:**
   - [ ] 30 consecutive days of stable operation with zero kill-switch surprises
   - [ ] All [PRD §M7–M10] metrics met
@@ -289,6 +350,11 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [autonom
 ### TX.3 — Pre-commit hook
 - **Files:** `.husky/pre-commit`
 - **Scope:** Run `pnpm typecheck` and changed-file tests.
+
+### TX.4 — Education, advice, and learning eval suite
+- **Files:** `evals/education/*.json`, `evals/advice/*.json`, `evals/learning/*.json`, eval runner and CI wiring
+- **Scope:** Golden scenarios for explanation quality, calibration, profile controls, stale/conflicting evidence, jurisdiction fallback, strategy-change approval, data deletion, and prompt injection.
+- **Acceptance:** Eval runner reports per-category pass rate; any authority-boundary or injection case is release-blocking.
 
 ---
 

@@ -1,6 +1,6 @@
-# Crypto Agent
+# Crypto Guy
 
-AI-assisted, risk-first crypto trading agent scaffold targeting Coinbase Advanced Trade.
+AI-assisted, risk-first interactive crypto trading and education scaffold targeting Coinbase Advanced Trade. Crypto Guy explains crypto concepts, shows how it reached each proposal, and learns from the operator under explicit memory and change-control policies. Its local dashboard is designed as a polished, accessible, responsive operator product—not a bare admin panel.
 
 ## Status
 
@@ -38,4 +38,4 @@ Set `DATABASE_URL` and keep `PERSISTENCE_ENABLED=true` to store market snapshots
 
 ## Safety stance
 
-The system should not allow an LLM to place trades directly. LLM output is context only; deterministic strategy and risk code decide whether anything can happen.
+The system should not allow an LLM to place trades directly. LLM output is context only; deterministic strategy and risk code may propose a trade. Every strategy-generated live order also requires an explicit, single-use operator approval after preview and before submission. Learning may personalize education and advice, but it may never silently change strategy, risk, or execution permissions.

@@ -1,6 +1,6 @@
-# Technical Specification: ACT v1
+# Technical Specification: Crypto Guy v1 (Interactive Live Execution)
 
-Concrete contracts and interfaces for the Autonomous Crypto Trading Agent. Companion to [autonomous_crypto_trading_agent_architecture.md](./autonomous_crypto_trading_agent_architecture.md); when this doc conflicts with the architecture, the architecture wins.
+Concrete contracts and interfaces for Crypto Guy. Companion to [crypto-guy-architecture.md](./crypto-guy-architecture.md); when this doc conflicts with the architecture, the architecture wins.
 
 ---
 
@@ -20,7 +20,7 @@ export type Price = Brand<string, 'Price'>;                  // string for preci
 
 export type Side = 'BUY' | 'SELL';
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP_LIMIT';
-export type OrderStatus = 'PENDING' | 'OPEN' | 'FILLED' | 'CANCELLED' | 'REJECTED' | 'EXPIRED';
+export type OrderStatus = 'PENDING' | 'AWAITING_APPROVAL' | 'OPEN' | 'FILLED' | 'CANCELLED' | 'REJECTED' | 'EXPIRED';
 export type TradingMode = 'paper' | 'sandbox' | 'live';
 export type MarketRegime = 'trend' | 'range' | 'high_volatility' | 'illiquid' | 'unknown';
 ```
@@ -68,10 +68,19 @@ export type RiskDecisionCreated = BaseEvent & {
   decision: RiskDecision;
 };
 
+export type OperatorApprovalRecorded = BaseEvent & {
+  type: 'OperatorApprovalRecorded';
+  proposalId: string;
+  actor: string;
+  decision: 'approved' | 'rejected';
+  previewHash: string;
+  expiresAt: Date;
+};
+
 export type OrderPreviewed = BaseEvent & {
   type: 'OrderPreviewed';
   clientOrderId: ClientOrderId;
-  previewResponse: unknown;    // parsed Coinbase shape, see §8
+  previewResponse: OrderPreviewResponse; // Zod-parsed Coinbase shape, see §8
 };
 
 export type OrderSubmitted = BaseEvent & {
@@ -159,7 +168,38 @@ If validation fails, the app must exit with code 1 and a structured error log.
 
 // risk_decisions
 { id, tradeIntentId, approved: boolean, policyVersion,
-  ruleResults: jsonb, rejectionReasons: text[], checkedAt }
+  ruleResults: jsonb, reasons: text[], checkedAt }
+
+// order_proposals
+{ id, tradeIntentId, riskDecisionId, clientOrderId, intentHash, previewHash,
+  previewJson: jsonb, status: 'pending'|'approved'|'rejected'|'expired'|'consumed',
+  expiresAt, createdAt, updatedAt }
+
+// operator_approvals
+{ id, proposalId, actor, decision: 'approved'|'rejected', reason,
+  intentHash, previewHash, decidedAt, consumedAt }
+
+// operator_profiles
+{ id, version, status: 'draft'|'active'|'superseded', jurisdiction,
+  explicitFacts: jsonb, createdAt, activatedAt }
+
+// learning_items
+{ id, kind: 'explicit_fact'|'derived_insight'|'education_progress', key,
+  valueJson: jsonb, sourceType, sourceId, evidenceJson: jsonb, confidence,
+  scope, reviewStatus: 'accepted'|'pending'|'rejected', retentionUntil,
+  createdAt, lastConfirmedAt, deletedAt }
+
+// advice_records
+{ id, correlationId, profileVersion, evidenceJson: jsonb,
+  assumptions: text[], contrarySignals: text[], recommendationJson: jsonb,
+  confidence, modelId, strategyVersion, operatorResponse, outcomeJson: jsonb,
+  createdAt, evaluatedAt }
+
+// change_proposals
+{ id, kind: 'strategy'|'risk', currentVersion, proposedPatch: jsonb,
+  evidenceJson: jsonb, expectedImpact, downsideAnalysis, rollbackCriteria,
+  status: 'pending'|'approved'|'rejected'|'applied'|'rolled_back',
+  actor, decidedAt, appliedAt, createdAt }
 
 // orders
 { id, clientOrderId, coinbaseOrderId, productId, side, type, status,
@@ -356,6 +396,7 @@ export interface ExecutionService {
   executeApproved(args: {
     intent: TradeIntent;
     decision: RiskDecision;
+    approval: OperatorApproval | null;
     client: ExchangeClient;
     mode: TradingMode;
   }): Promise<ExecutionResult>;
@@ -363,13 +404,31 @@ export interface ExecutionService {
 
 export type ExecutionResult =
   | { kind: 'submitted'; orderId: OrderId; clientOrderId: ClientOrderId }
+  | { kind: 'awaiting_operator_approval'; proposalId: string; expiresAt: Date }
+  | { kind: 'approval_rejected'; reason: string }
   | { kind: 'preview_rejected'; reason: string }
   | { kind: 'submission_failed'; reason: string; retryable: boolean };
 ```
 
-Always calls `previewOrder` first when `requireOrderPreview=true`. Stores `clientOrderId` (UUID v4) before submission for idempotency.
+Always calls `previewOrder` first when `requireOrderPreview=true`. Stores `clientOrderId` (UUID v4) before submission for idempotency. In live mode, it persists an immutable proposal and stops. A later execution attempt may call `createOrder` only after validating a single-use, unexpired operator approval whose intent and preview hashes exactly match the proposal. Approval is consumed atomically with submission claiming so concurrent workers cannot reuse it. Paper and sandbox modes do not require operator approval.
 
-### 5.7 ReconciliationService (`packages/execution/src/reconciliation.ts`)
+### 5.7 ApprovalService (`packages/execution/src/approval-service.ts`)
+
+```typescript
+export interface OperatorApproval {
+  proposalId: string;
+  actor: string;
+  decision: 'approved' | 'rejected';
+  intentHash: string;
+  previewHash: string;
+  decidedAt: Date;
+  expiresAt: Date;
+}
+```
+
+Approval validation fails closed for missing, expired, reused, rejected, malformed, or hash-mismatched records. Postgres is the source of truth. Approval, claim, and consumption use one transaction with row locking or optimistic concurrency. See [INTERACTION_POLICY.md](./INTERACTION_POLICY.md).
+
+### 5.8 ReconciliationService (`packages/execution/src/reconciliation.ts`)
 
 Runs on a schedule (configurable, default 30s). For each enabled product:
 1. Fetch remote open orders, fills since last reconcile, account balances.
@@ -377,7 +436,7 @@ Runs on a schedule (configurable, default 30s). For each enabled product:
 3. Emit `ReconciliationDriftDetected` for each mismatch.
 4. If drift count over rolling window exceeds threshold, trigger circuit breaker.
 
-### 5.8 OpsControlService (`packages/risk/src/ops-control.ts`)
+### 5.9 OpsControlService (`packages/risk/src/ops-control.ts`)
 
 ```typescript
 export interface OpsControl {
@@ -423,6 +482,50 @@ interface AIContextInput {
 
 ### Output: see §5.3 `AIContextSchema`.
 
+## 6.1 Education and learning contracts
+
+```typescript
+const OperatorProfileSchema = z.object({
+  version: z.number().int().positive(),
+  jurisdiction: z.string().min(2).max(100),
+  goals: z.array(z.string().max(200)).max(20),
+  experienceLevel: z.enum(['new', 'beginner', 'intermediate', 'advanced']),
+  timeHorizon: z.string().max(200),
+  liquidityNeeds: z.string().max(500),
+  financialConstraints: z.array(z.string().max(300)).max(20),
+  riskTolerance: z.enum(['very_low', 'low', 'moderate', 'high']),
+  taxJurisdiction: z.string().max(100),
+  confirmedAt: z.date(),
+});
+
+const LearningItemSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(['explicit_fact', 'derived_insight', 'education_progress']),
+  key: z.string().min(1).max(100),
+  value: z.unknown(),
+  source: z.object({ type: z.string(), id: z.string() }),
+  evidenceIds: z.array(z.string()).max(100),
+  confidence: z.number().min(0).max(1),
+  scope: z.enum(['session', 'durable']),
+  reviewStatus: z.enum(['accepted', 'pending', 'rejected']),
+  retentionUntil: z.date().nullable(),
+  createdAt: z.date(),
+  lastConfirmedAt: z.date().nullable(),
+});
+```
+
+Precedence rules are deterministic: current explicit facts override derived insights; rejected or deleted items are excluded; conflicting items trigger operator review; stale items reduce personalization. Derived insights start as `pending` unless an allowlisted low-risk education-progress rule marks them accepted. No learning item can write to strategy, risk, configuration, credentials, or approval tables.
+
+## 6.2 Education and advice contracts
+
+An educational response contains `what`, `how`, `whyItMatters`, `risks`, `example`, `limitations`, and an optional comprehension check. A personalized advice response additionally contains `profileVersion`, `profileFactorsUsed`, `evidence`, `facts`, `estimates`, `assumptions`, `contrarySignals`, `alternatives` including no action, `downsideScenarios`, `invalidationConditions`, `confidence`, and `disclosures`.
+
+Advice generation fails closed to non-personalized education when the active profile is unavailable, internally inconsistent, stale beyond policy, or from an unsupported jurisdiction. Stale market data prohibits current-market advice. Model/schema failure returns deterministic educational fallback or no recommendation, never invented profile facts.
+
+## 6.3 Learned change proposals
+
+Strategy and risk suggestions are immutable `ChangeProposal` records containing the current version, proposed patch, evidence, expected impact, downside analysis, test results, and rollback criteria. Only the authenticated operator can approve them. Approval is specific to the exact proposal hash, single-use, and distinct from order approval. Application uses optimistic concurrency and fails if the current strategy or policy version changed after proposal creation.
+
 ## 7. Operator API surface (Fastify)
 
 | Method | Path | Auth | Description |
@@ -437,10 +540,42 @@ interface AIContextInput {
 | GET | `/portfolio` | bearer | Current positions, exposure, PnL |
 | GET | `/orders?since=…` | bearer | Recent orders |
 | GET | `/decisions?since=…` | bearer | Recent intents, risk decisions, AI contexts (joined) |
+| GET | `/education/topics` | bearer | Recommended topics and education progress |
+| POST | `/education/explain` | bearer | Explain a concept or current proposal at the operator's level |
+| GET | `/profile` | bearer | Active profile, pending insights, sources, confidence, and retention |
+| PATCH | `/profile` | bearer | Correct explicit profile facts and create a new version |
+| POST | `/profile/insights/:id/accept` | bearer | Accept a derived insight |
+| POST | `/profile/insights/:id/reject` | bearer | Reject a derived insight |
+| POST | `/profile/export` | bearer | Export profile and learning data |
+| DELETE | `/profile/items/:id` | bearer | Delete a learning item subject to minimal audit tombstone policy |
+| GET | `/advice/:id` | bearer | Advice, provenance, profile version, and later outcome |
+| GET | `/change-proposals` | bearer | Pending and historical strategy/risk change proposals |
+| POST | `/change-proposals/:id/approve` | bearer | Approve one exact learned change proposal |
+| POST | `/change-proposals/:id/reject` | bearer | Reject a learned change proposal |
+| GET | `/proposals?status=pending` | bearer | Review pending live proposals and their expiry |
+| POST | `/proposals/:id/approve` | bearer | Approve one exact, current preview |
+| POST | `/proposals/:id/reject` | bearer | Reject a proposal with optional reason |
 | POST | `/backtests` | bearer | Start backtest job |
 | GET | `/backtests/:id` | bearer | Backtest status + results |
 
 Bearer token comes from `OPERATOR_API_TOKEN` env var. Single static token for solo operator. Rotate manually.
+
+## 7.1 Dashboard UI/UX contract
+
+The local dashboard uses shared tokens and reusable primitives for typography, spacing, color, focus, motion, data visualization, feedback, and layout. Core views cover overview, portfolio, market context, education, profile/memory, advice, trade proposals, strategy/risk change proposals, audit history, and safety operations.
+
+Required behavior:
+
+- Persistently show trading mode, kill-switch/pause state, connectivity, and data freshness.
+- Implement loading, empty, fresh, stale, degraded, error, retrying, disabled, and read-only states for every data surface.
+- Use progressive disclosure: lead with the decision and material risks; allow evidence, methodology, education, and audit details to expand in place.
+- Never rely on color alone. Meet WCAG 2.2 AA targets, preserve visible focus, support keyboard-only workflows, semantic landmarks, screen-reader names, reduced motion, and 200% text zoom.
+- Render responsive desktop and tablet layouts without hiding safety controls or material proposal details.
+- Show exact proposal parameters, fees, slippage, expiry, confidence, risk results, downside, and changes since the prior preview before approval.
+- Keep approve/reject and destructive safety actions visually distinct. Confirm consequential actions with plain-language impact, not dark patterns.
+- Sanitize rendered external/LLM content and prohibit arbitrary HTML or script execution.
+
+Performance targets under the supported deployment profile are LCP ≤ 2.5s, INP ≤ 200ms, and CLS ≤ 0.1. Automated accessibility checks, component-state tests, responsive screenshots, visual regression, and browser end-to-end tests are release gates for critical workflows.
 
 ## 8. Coinbase integration specifics
 
@@ -509,8 +644,15 @@ async function tradingLoopTick(correlationId: string) {
     await persist.saveRiskDecision({ ...riskDecision, tradeIntentId: intent.id });
     if (!riskDecision.approved) continue;
 
-    // 9. Execute (paper, sandbox, or live)
-    const result = await execution.executeApproved({ intent, decision: riskDecision, client, mode });
+    // 9. Execute automatically in paper/sandbox. In live mode, persist the
+    // previewed proposal and stop pending a separate operator action.
+    const result = await execution.executeApproved({
+      intent,
+      decision: riskDecision,
+      approval: null,
+      client,
+      mode,
+    });
     await persist.saveExecutionResult({ result, intent });
   }
 }
@@ -531,6 +673,10 @@ Custom error classes in `packages/core/src/errors.ts`. Each maps to a halt/skip/
 | `RiskRejectedError` | Risk engine declined | Persist + log; not an exception in normal flow |
 | `ReconciliationDriftError` | Drift exceeds threshold | Trigger circuit breaker |
 | `KillSwitchActiveError` | Any order path hits active kill switch | Refuse, log ops_event |
+| `OperatorApprovalError` | Approval missing, stale, reused, rejected, or mismatched | Refuse submission, persist reason, alert on integrity mismatch |
+| `ProfileConflictError` | Explicit facts conflict or required facts are stale | Ask operator to resolve; fall back to non-personalized education |
+| `LearningStoreError` | Learning persistence unavailable or malformed | Disable learning/personalized advice; preserve deterministic safety operations |
+| `UnsupportedAdviceJurisdictionError` | Personalized advice requested outside enabled jurisdiction | Provide general education only and record the guardrail decision |
 
 ## 11. Backtest harness (`packages/backtest/`)
 
@@ -544,17 +690,26 @@ Custom error classes in `packages/core/src/errors.ts`. Each maps to a halt/skip/
 
 ### Metrics (prom-client)
 
-- `act_loop_iterations_total{result="ok|halted|error"}`
-- `act_loop_duration_seconds` (histogram)
-- `act_orders_submitted_total{mode,product,side}`
-- `act_orders_rejected_total{reason}`
-- `act_risk_rule_failures_total{rule}`
-- `act_ai_context_latency_seconds` (histogram)
-- `act_coinbase_rest_latency_seconds{endpoint}` (histogram)
-- `act_ws_reconnects_total{stream}`
-- `act_reconciliation_drift_total{field}`
-- `act_realized_pnl_usd` (gauge)
-- `act_drawdown_pct` (gauge)
+- `crypto_guy_loop_iterations_total{result="ok|halted|error"}`
+- `crypto_guy_loop_duration_seconds` (histogram)
+- `crypto_guy_orders_submitted_total{mode,product,side}`
+- `crypto_guy_orders_rejected_total{reason}`
+- `crypto_guy_order_proposals_total{status}`
+- `crypto_guy_operator_approval_duration_seconds` (histogram)
+- `crypto_guy_approval_validation_failures_total{reason}`
+- `crypto_guy_education_responses_total{topic,result}`
+- `crypto_guy_learning_items_total{kind,status}`
+- `crypto_guy_profile_corrections_total{key}`
+- `crypto_guy_advice_total{result,jurisdiction}`
+- `crypto_guy_change_proposals_total{kind,status}`
+- `crypto_guy_advice_calibration_error` (gauge; defined by eval methodology)
+- `crypto_guy_risk_rule_failures_total{rule}`
+- `crypto_guy_ai_context_latency_seconds` (histogram)
+- `crypto_guy_coinbase_rest_latency_seconds{endpoint}` (histogram)
+- `crypto_guy_ws_reconnects_total{stream}`
+- `crypto_guy_reconciliation_drift_total{field}`
+- `crypto_guy_realized_pnl_usd` (gauge)
+- `crypto_guy_drawdown_pct` (gauge)
 
 ### Structured logs
 
@@ -565,6 +720,9 @@ Every log line includes: `correlationId`, `productId` (when relevant), `mode`, `
 Conditions (defined in code; alerting transport pluggable):
 - Kill switch activated
 - Any live order submitted
+- Live proposal awaiting operator decision or nearing expiry
+- Profile conflict or unsupported personalized-advice jurisdiction
+- Learned strategy/risk change awaiting operator review
 - Daily loss halt triggered
 - Order rejection spike (>N/min)
 - Reconciliation drift > threshold

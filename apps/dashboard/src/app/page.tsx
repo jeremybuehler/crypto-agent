@@ -42,7 +42,7 @@ export default function Dashboard() {
       </main>
 
       <footer className="border-t border-terminal-border px-4 py-2 text-terminal-dim text-xs flex justify-between">
-        <span>ACT v0.1 · PAPER MODE</span>
+        <span>Crypto Guy v0.1 · PAPER MODE</span>
         <span>POLLS EVERY 3S</span>
       </footer>
     </div>

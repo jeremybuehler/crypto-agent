@@ -1,4 +1,4 @@
-# Crypto Agent Runbook
+# Crypto Guy Runbook
 
 ## Local setup
 
@@ -46,3 +46,13 @@ pnpm dev:worker
 - Clear kill switch: `POST /ops/clear-kill-switch`
 
 The scaffold refuses to clear the kill switch through the API in live mode.
+
+## Interactive live approval
+
+Live mode may compute and preview proposals automatically. Review the proposal's intent, rationale, risk results, estimated fees/slippage, preview hash, and expiry before approving it through the authenticated operator API or dashboard. Approval is single-use and authorizes only that exact preview. Reject unexpected proposals; let stale proposals expire. Never treat `LIVE_TRADING_ACK=true` as approval for an individual trade.
+
+## Learning and personalization operations
+
+The learning APIs and dashboard controls are planned and must not be treated as implemented until their implementation-plan acceptance tests pass. They will support viewing and correcting the operator profile, accepting or rejecting inferred insights, exporting or deleting learning data, reviewing advice provenance, and approving or rejecting strategy/risk change proposals.
+
+If learning storage is unavailable, continue deterministic safety operations but disable profile updates and personalized advice. If profile facts conflict or become stale, resolve them before relying on personalized guidance. Never enter credentials, private keys, seed phrases, or API tokens into educational or profile fields.

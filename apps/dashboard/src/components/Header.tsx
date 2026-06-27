@@ -12,7 +12,7 @@ export default function Header({ status, lastUpdated }: Props) {
     <header className="border-b border-terminal-border px-4 py-2 flex items-center justify-between flex-wrap gap-2">
       <div className="flex items-center gap-4">
         <span className="text-terminal-orange font-semibold tracking-widest text-sm uppercase">
-          ACT
+          Crypto Guy
         </span>
         <span className="text-terminal-dim text-xs">Autonomous Crypto Trader</span>
       </div>

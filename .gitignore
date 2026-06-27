@@ -6,3 +6,5 @@ coverage
 *.tsbuildinfo
 .next
 next-env.d.ts
+.snapshots
+.DS_Store
