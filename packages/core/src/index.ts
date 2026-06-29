@@ -46,8 +46,18 @@ const envSchema = z.object({
   USE_SAMPLE_MARKET_DATA: booleanFromEnv.default("false"),
   PERSISTENCE_ENABLED: booleanFromEnv.default("true"),
   DATABASE_URL: z.string().url().optional(),
+  OPERATOR_API_TOKEN: z.string().optional(),
+  INTERNAL_API_TOKEN: z.string().optional(),
+  ALLOWED_ORIGINS: z.string().optional(),
+  TRUST_PROXY: booleanFromEnv.default("false"),
+  API_BODY_LIMIT_BYTES: numberFromEnv.default("65536"),
+  API_RATE_LIMIT_MAX: numberFromEnv.default("120"),
+  API_RATE_LIMIT_WINDOW_MS: numberFromEnv.default("60000"),
   PORT: numberFromEnv.default("3000")
 });
+
+/** Minimum length (proxy for entropy) required of any configured API token. */
+export const MIN_API_TOKEN_LENGTH = 32;
 
 export type AgentConfig = ReturnType<typeof loadConfig>;
 
@@ -69,6 +79,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   if (parsed.PERSISTENCE_ENABLED && !parsed.DATABASE_URL) {
     throw new Error("PERSISTENCE_ENABLED=true requires DATABASE_URL.");
   }
+
+  // API security configuration. Fail closed, and never include token values in
+  // any error message (docs/SECURITY.md "Trust boundaries and authentication").
+  const isProduction = parsed.NODE_ENV === "production";
+  const tokenIssues: string[] = [];
+  if (isProduction && !parsed.OPERATOR_API_TOKEN) tokenIssues.push("OPERATOR_API_TOKEN is required in production");
+  if (isProduction && !parsed.INTERNAL_API_TOKEN) tokenIssues.push("INTERNAL_API_TOKEN is required in production");
+  if (parsed.OPERATOR_API_TOKEN && parsed.OPERATOR_API_TOKEN.length < MIN_API_TOKEN_LENGTH) {
+    tokenIssues.push(`OPERATOR_API_TOKEN must be at least ${MIN_API_TOKEN_LENGTH} characters`);
+  }
+  if (parsed.INTERNAL_API_TOKEN && parsed.INTERNAL_API_TOKEN.length < MIN_API_TOKEN_LENGTH) {
+    tokenIssues.push(`INTERNAL_API_TOKEN must be at least ${MIN_API_TOKEN_LENGTH} characters`);
+  }
+  if (
+    parsed.OPERATOR_API_TOKEN &&
+    parsed.INTERNAL_API_TOKEN &&
+    parsed.OPERATOR_API_TOKEN === parsed.INTERNAL_API_TOKEN
+  ) {
+    tokenIssues.push("OPERATOR_API_TOKEN and INTERNAL_API_TOKEN must be different");
+  }
+  if (tokenIssues.length > 0) {
+    throw new Error(`Invalid API security configuration: ${tokenIssues.join(", ")}`);
+  }
+
+  const allowedOrigins = parsed.ALLOWED_ORIGINS
+    ? parsed.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean)
+    : [];
 
   const config = {
     nodeEnv: parsed.NODE_ENV,
@@ -98,6 +135,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       enabled: parsed.PERSISTENCE_ENABLED,
       databaseUrl: parsed.DATABASE_URL
     },
+    security: {
+      operatorApiToken: parsed.OPERATOR_API_TOKEN,
+      internalApiToken: parsed.INTERNAL_API_TOKEN,
+      allowedOrigins,
+      trustProxy: parsed.TRUST_PROXY,
+      bodyLimitBytes: parsed.API_BODY_LIMIT_BYTES,
+      rateLimitMax: parsed.API_RATE_LIMIT_MAX,
+      rateLimitWindowMs: parsed.API_RATE_LIMIT_WINDOW_MS
+    },
     port: parsed.PORT
   };
   return deepFreeze(config);
@@ -117,9 +163,20 @@ export interface Clock {
 
 export const SystemClock: Clock = { now: () => new Date() };
 
+/** Paths redacted from every structured log line. Shared by the worker logger
+ * and the API's Fastify logger so secrets never reach disk or stdout. */
+export const LOG_REDACT_PATHS: string[] = [
+  "coinbase.apiPrivateKey",
+  "authorization",
+  "headers.authorization",
+  'headers["x-internal-token"]',
+  "security.operatorApiToken",
+  "security.internalApiToken"
+];
+
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? "info",
-  redact: ["coinbase.apiPrivateKey", "authorization", "headers.authorization"]
+  redact: LOG_REDACT_PATHS
 });
 
 export type ProductId = `${string}-${string}`;
