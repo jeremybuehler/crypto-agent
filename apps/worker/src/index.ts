@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ClaudeAIContextProvider, ConservativeStubAIContextProvider, type AIContextProvider } from "@agent/ai";
 import { CoinbasePublicMarketData } from "@agent/coinbase";
 import { loadConfig, logger, type MarketSnapshot, type PortfolioState } from "@agent/core";
-import { PaperBroker } from "@agent/execution";
+import { PaperBroker, previewOrder } from "@agent/execution";
 import { computeFeatures, type Candle } from "@agent/market-data";
 import { createPersistenceRepository } from "@agent/persistence";
 import { evaluateRisk } from "@agent/risk";
@@ -93,12 +93,62 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
     return portfolio;
   }
 
+  // Interactive approval: emit a proposal for the operator instead of filling.
+  // The simulation-only auto-fill below stays the default for tests/backtests.
+  if (config.execution.interactiveApproval) {
+    await postProposal(intent, market);
+    return portfolio;
+  }
+
   const broker = new PaperBroker();
   const result = broker.execute(decision, market, portfolio);
   await persistence.savePaperFill({ tradeIntentId: intent.id, fill: result.fill });
   logger.info({ intent, decision, fill: result.fill, portfolio: result.portfolio }, "Paper trade executed.");
 
   return result.portfolio;
+}
+
+/**
+ * Submit a proposal to the operator API for interactive approval. Authenticated
+ * with the internal token and bounded by a timeout; a failure is logged, never
+ * swallowed, but does not throw (the loop continues and will re-propose).
+ */
+async function postProposal(
+  intent: import("@agent/core").TradeIntent,
+  market: import("@agent/core").MarketSnapshot
+): Promise<void> {
+  const apiUrl = process.env.AGENT_API_URL;
+  const token = config.security.internalApiToken;
+  if (!apiUrl || !token) {
+    logger.warn("Interactive approval is on but AGENT_API_URL/INTERNAL_API_TOKEN is missing; skipping proposal.");
+    return;
+  }
+
+  const preview = previewOrder(intent, market);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const res = await fetch(`${apiUrl}/internal/proposal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-token": token },
+      body: JSON.stringify({
+        preview,
+        tradeIntentId: intent.id,
+        ttlSeconds: config.execution.proposalTtlSeconds,
+        correlationId: intent.id
+      }),
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      logger.error({ status: res.status }, "Proposal submission rejected by API.");
+      return;
+    }
+    logger.info({ intent, preview }, "Proposal submitted for operator approval.");
+  } catch (error) {
+    logger.error({ error }, "Proposal submission failed.");
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

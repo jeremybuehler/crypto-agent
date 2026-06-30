@@ -223,6 +223,26 @@ export const ProposalListResponseSchema = z
 
 export const ApprovalRequestSchema = z.object({ digest: Sha256HexSchema }).strict();
 
+// Worker -> API: create a proposal awaiting operator approval. The API computes
+// the digest and expiry server-side; the worker supplies the exact preview.
+export const InternalProposalSchema = z
+  .object({
+    preview: OrderPreviewSchema,
+    tradeIntentId: z.string().uuid().nullable().optional(),
+    ttlSeconds: z.number().int().positive().max(3600),
+    correlationId: z.string().uuid()
+  })
+  .strict();
+
+export const InternalProposalResponseSchema = z
+  .object({
+    id: z.string().uuid(),
+    digest: Sha256HexSchema,
+    status: ProposalStatusSchema,
+    expiresAt: IsoDateTimeSchema
+  })
+  .strict();
+
 export const RejectionRequestSchema = z
   .object({ reason: z.string().max(MAX_SHORT_TEXT_LEN).optional() })
   .strict();
@@ -357,3 +377,5 @@ export type TradeListResponse = z.infer<typeof TradeListResponseSchema>;
 export type MetricsResponse = z.infer<typeof MetricsResponseSchema>;
 export type HeartbeatIngest = z.infer<typeof HeartbeatIngestSchema>;
 export type AuditListResponse = z.infer<typeof AuditListResponseSchema>;
+export type InternalProposal = z.infer<typeof InternalProposalSchema>;
+export type InternalProposalResponse = z.infer<typeof InternalProposalResponseSchema>;

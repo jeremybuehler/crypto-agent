@@ -39,6 +39,11 @@ const envSchema = z.object({
   ALLOW_SHORTS: booleanFromEnv.default("false"),
   ALLOW_LEVERAGE: booleanFromEnv.default("false"),
   REQUIRE_ORDER_PREVIEW: booleanFromEnv.default("true"),
+  // When true, the worker emits a proposal for operator approval instead of
+  // auto-filling. Default false keeps the simulation-only auto-fill for
+  // tests/backtests.
+  INTERACTIVE_APPROVAL: booleanFromEnv.default("false"),
+  PROPOSAL_TTL_SECONDS: z.coerce.number().int().positive().max(3600).default(300),
   LIVE_TRADING_ACK: booleanFromEnv.default("false"),
   ANTHROPIC_API_KEY: z.string().optional(),
   REDIS_URL: z.string().optional(),
@@ -137,6 +142,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     persistence: {
       enabled: parsed.PERSISTENCE_ENABLED,
       databaseUrl: parsed.DATABASE_URL
+    },
+    execution: {
+      interactiveApproval: parsed.INTERACTIVE_APPROVAL,
+      proposalTtlSeconds: parsed.PROPOSAL_TTL_SECONDS
     },
     security: {
       operatorApiToken: parsed.OPERATOR_API_TOKEN,

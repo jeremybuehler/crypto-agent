@@ -30,6 +30,7 @@ import { requireInternal, requireOperator } from "./auth.js";
 import { registerSecurity } from "./plugins/security.js";
 import { registerReadiness } from "./routes/health.js";
 import { registerPrometheus } from "./routes/metrics.js";
+import { registerProposalRoutes } from "./routes/proposals.js";
 import { ValidationError } from "./errors.js";
 import {
   AuditListResponseSchema,
@@ -149,6 +150,19 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
     },
     workerId: WORKER_ID,
     requireOperator: requireOp
+  });
+
+  // Interactive proposals: worker creates (internal auth), operator decides.
+  registerProposalRoutes(app, {
+    repo: {
+      createProposal: (input) => repo!.createProposal(input),
+      getProposal: (id) => repo!.getProposal(id),
+      listProposals: (limit, statuses) => repo!.listProposals(limit, statuses),
+      decideProposal: (input) => repo!.decideProposal(input),
+      recordAuditEvent: (event) => repo!.recordAuditEvent(event)
+    },
+    requireOperator: requireOp,
+    requireInternal: requireInt
   });
 
   app.get("/status", { preHandler: requireOp }, async () => ({

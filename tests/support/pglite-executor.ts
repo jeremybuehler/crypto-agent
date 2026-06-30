@@ -43,8 +43,8 @@ export function createPgliteExecutor(): PgliteExecutor {
     },
     async truncateAll() {
       await db.exec(
-        `TRUNCATE portfolio_snapshots, worker_heartbeats, audit_events,
-                  paper_fills, risk_decisions, trade_intents, ai_contexts,
+        `TRUNCATE proposal_decisions, proposals, portfolio_snapshots, worker_heartbeats,
+                  audit_events, paper_fills, risk_decisions, trade_intents, ai_contexts,
                   market_snapshots RESTART IDENTITY CASCADE;`
       );
     }

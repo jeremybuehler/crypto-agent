@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@agent/core": "workspace:*",
+    "@agent/execution": "workspace:*",
     "@agent/persistence": "workspace:*",
     "@agent/risk": "workspace:*"
   }

@@ -57,6 +57,9 @@ importers:
       '@agent/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@agent/execution':
+        specifier: workspace:*
+        version: link:../../packages/execution
       '@agent/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence

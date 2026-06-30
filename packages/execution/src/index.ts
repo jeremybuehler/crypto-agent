@@ -2,6 +2,8 @@ import type { Clock, MarketSnapshot, PortfolioState, RiskDecision } from "@agent
 import { SystemClock } from "@agent/core";
 import { randomUUID } from "node:crypto";
 
+export * from "./proposals.js";
+
 export interface SimulatedFill {
   fillId: string;
   productId: string;

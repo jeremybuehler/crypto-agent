@@ -13,7 +13,33 @@
  * hermetic API unit/security tests free of any database.
  */
 import { randomUUID } from "node:crypto";
+import { evaluateApproval, type OrderPreview, type ProposalStatus, type StoredProposal } from "@agent/execution";
 import type { SqlExecutor } from "./sql-executor.js";
+
+export interface CreateProposalInput {
+  id: string;
+  tradeIntentId?: string | null;
+  preview: OrderPreview;
+  digest: string;
+  correlationId: string;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+export type DecisionReason = "not_found" | "not_pending" | "expired" | "digest_mismatch";
+
+export type DecisionResult =
+  | { ok: true; status: "approved" | "rejected"; decidedAt: Date }
+  | { ok: false; reason: DecisionReason };
+
+export interface DecideProposalInput {
+  proposalId: string;
+  decision: "approved" | "rejected";
+  digest?: string;
+  reason?: string;
+  correlationId: string;
+  now: Date;
+}
 
 export type Side = "BUY" | "SELL";
 export type ComponentStatus = "ok" | "degraded" | "down";
@@ -101,7 +127,30 @@ export interface OperatorRepository {
   recordAuditEvent(event: AuditEventInput): Promise<void>;
   listAuditEvents(limit: number): Promise<AuditEventRow[]>;
   ingestHeartbeat(input: IngestHeartbeatInput): Promise<void>;
+  createProposal(input: CreateProposalInput): Promise<void>;
+  getProposal(id: string): Promise<StoredProposal | null>;
+  listProposals(limit: number, statuses?: ProposalStatus[]): Promise<StoredProposal[]>;
+  decideProposal(input: DecideProposalInput): Promise<DecisionResult>;
   close(): Promise<void>;
+}
+
+function rowToProposal(row: Record<string, unknown>): StoredProposal {
+  return {
+    id: row.id as string,
+    status: row.status as ProposalStatus,
+    preview: {
+      productId: row.product_id as string,
+      side: row.side as Side,
+      quoteSizeUsd: num(row.quote_size_usd),
+      baseSize: num(row.base_size),
+      limitPrice: row.limit_price === null ? null : num(row.limit_price),
+      estimatedFeeUsd: num(row.estimated_fee_usd),
+      estimatedSlippageBps: num(row.estimated_slippage_bps)
+    },
+    digest: row.digest as string,
+    createdAt: date(row.created_at),
+    expiresAt: date(row.expires_at)
+  };
 }
 
 /**
@@ -336,6 +385,75 @@ export class PostgresOperatorRepository implements OperatorRepository {
     });
   }
 
+  async createProposal(input: CreateProposalInput): Promise<void> {
+    await this.executor.query(
+      `INSERT INTO proposals
+         (id, status, trade_intent_id, product_id, side, quote_size_usd, base_size, limit_price,
+          estimated_fee_usd, estimated_slippage_bps, digest, correlation_id, created_at, expires_at)
+       VALUES ($1, 'pending', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        input.id,
+        input.tradeIntentId ?? null,
+        input.preview.productId,
+        input.preview.side,
+        input.preview.quoteSizeUsd,
+        input.preview.baseSize,
+        input.preview.limitPrice,
+        input.preview.estimatedFeeUsd,
+        input.preview.estimatedSlippageBps,
+        input.digest,
+        input.correlationId,
+        input.createdAt,
+        input.expiresAt
+      ]
+    );
+  }
+
+  async getProposal(id: string): Promise<StoredProposal | null> {
+    const result = await this.executor.query("SELECT * FROM proposals WHERE id = $1", [id]);
+    const row = result.rows[0];
+    return row ? rowToProposal(row) : null;
+  }
+
+  async listProposals(limit: number, statuses?: ProposalStatus[]): Promise<StoredProposal[]> {
+    const result = statuses?.length
+      ? await this.executor.query(
+          "SELECT * FROM proposals WHERE status = ANY($1::text[]) ORDER BY created_at DESC LIMIT $2",
+          [statuses, limit]
+        )
+      : await this.executor.query("SELECT * FROM proposals ORDER BY created_at DESC LIMIT $1", [limit]);
+    return result.rows.map(rowToProposal);
+  }
+
+  async decideProposal(input: DecideProposalInput): Promise<DecisionResult> {
+    return this.executor.transaction(async (tx) => {
+      // FOR UPDATE serializes concurrent deciders: the second waits, then sees a
+      // non-pending status. The UNIQUE(proposal_id) decision row is a backstop.
+      const found = await tx.query("SELECT * FROM proposals WHERE id = $1 FOR UPDATE", [input.proposalId]);
+      const row = found.rows[0];
+      if (!row) return { ok: false, reason: "not_found" };
+      const proposal = rowToProposal(row);
+
+      if (input.decision === "approved") {
+        const verdict = evaluateApproval(proposal, input.digest ?? "", input.now);
+        if (!verdict.ok) {
+          return { ok: false, reason: verdict.reason };
+        }
+      } else if (proposal.status !== "pending") {
+        return { ok: false, reason: "not_pending" };
+      }
+
+      await tx.query(
+        `INSERT INTO proposal_decisions (proposal_id, decision, digest, reason, correlation_id, decided_at)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [input.proposalId, input.decision, input.digest ?? null, input.reason ?? null, input.correlationId, input.now]
+      );
+      await tx.query("UPDATE proposals SET status = $2 WHERE id = $1", [input.proposalId, input.decision]);
+      return { ok: true, status: input.decision, decidedAt: input.now };
+    });
+  }
+
   async close(): Promise<void> {
     await this.executor.close();
   }
@@ -350,6 +468,7 @@ export class InMemoryOperatorRepository implements OperatorRepository {
   private fills: FillRow[] = [];
   private heartbeats = new Map<string, WorkerHeartbeat>();
   private audit: AuditEventRow[] = [];
+  private proposals = new Map<string, StoredProposal>();
 
   /** Test seam: seed fills (the worker writes these via the audit chain). */
   seedFills(fills: FillRow[]): void {
@@ -409,6 +528,42 @@ export class InMemoryOperatorRepository implements OperatorRepository {
     };
     if (input.detail) event.metadata = input.detail;
     this.audit.push(event);
+  }
+
+  async createProposal(input: CreateProposalInput): Promise<void> {
+    if (this.proposals.has(input.id)) return;
+    this.proposals.set(input.id, {
+      id: input.id,
+      status: "pending",
+      preview: input.preview,
+      digest: input.digest,
+      createdAt: input.createdAt,
+      expiresAt: input.expiresAt
+    });
+  }
+
+  async getProposal(id: string): Promise<StoredProposal | null> {
+    return this.proposals.get(id) ?? null;
+  }
+
+  async listProposals(limit: number, statuses?: ProposalStatus[]): Promise<StoredProposal[]> {
+    return [...this.proposals.values()]
+      .filter((p) => !statuses?.length || statuses.includes(p.status))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+
+  async decideProposal(input: DecideProposalInput): Promise<DecisionResult> {
+    const proposal = this.proposals.get(input.proposalId);
+    if (!proposal) return { ok: false, reason: "not_found" };
+    if (input.decision === "approved") {
+      const verdict = evaluateApproval(proposal, input.digest ?? "", input.now);
+      if (!verdict.ok) return { ok: false, reason: verdict.reason };
+    } else if (proposal.status !== "pending") {
+      return { ok: false, reason: "not_pending" };
+    }
+    this.proposals.set(input.proposalId, { ...proposal, status: input.decision });
+    return { ok: true, status: input.decision, decidedAt: input.now };
   }
 
   async close(): Promise<void> {}
