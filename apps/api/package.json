@@ -8,6 +8,7 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "@agent/ai": "workspace:*",
     "@agent/core": "workspace:*",
     "@agent/execution": "workspace:*",
     "@agent/persistence": "workspace:*",

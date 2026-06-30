@@ -166,7 +166,18 @@ export interface OperatorRepository {
   correctMemory(input: CorrectMemoryInput): Promise<CorrectResult>;
   setMemoryStatus(id: string, status: MemoryStatus, actor: "operator" | "worker" | "system"): Promise<boolean>;
   exportMemories(): Promise<LearnedMemory[]>;
+  saveAdvice(input: SaveAdviceInput): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface SaveAdviceInput {
+  id: string;
+  profileVersion: number;
+  question: string;
+  summary: string;
+  payload: unknown;
+  correlationId: string;
+  createdAt: Date;
 }
 
 function rowToProposal(row: Record<string, unknown>): StoredProposal {
@@ -566,6 +577,14 @@ export class PostgresOperatorRepository implements OperatorRepository {
     return result.rows.map(rowToMemory);
   }
 
+  async saveAdvice(input: SaveAdviceInput): Promise<void> {
+    await this.executor.query(
+      `INSERT INTO advice_records (id, profile_version, jurisdiction, question, summary, payload, correlation_id, created_at)
+       VALUES ($1, $2, 'US', $3, $4, $5, $6, $7)`,
+      [input.id, input.profileVersion, input.question, input.summary, JSON.stringify(input.payload), input.correlationId, input.createdAt]
+    );
+  }
+
   private async appendHistory(
     tx: { query(text: string, values?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> },
     memoryId: string,
@@ -742,6 +761,8 @@ export class InMemoryOperatorRepository implements OperatorRepository {
   async exportMemories(): Promise<LearnedMemory[]> {
     return [...this.memories.values()];
   }
+
+  async saveAdvice(): Promise<void> {}
 
   async close(): Promise<void> {}
 }

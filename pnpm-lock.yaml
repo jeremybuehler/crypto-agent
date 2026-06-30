@@ -54,6 +54,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@agent/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@agent/core':
         specifier: workspace:*
         version: link:../../packages/core

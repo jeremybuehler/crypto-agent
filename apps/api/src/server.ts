@@ -32,6 +32,7 @@ import { registerReadiness } from "./routes/health.js";
 import { registerPrometheus } from "./routes/metrics.js";
 import { registerProposalRoutes } from "./routes/proposals.js";
 import { registerLearningRoutes } from "./routes/learning.js";
+import { registerAdviceRoutes } from "./routes/advice.js";
 import { ValidationError } from "./errors.js";
 import {
   AuditListResponseSchema,
@@ -177,6 +178,15 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
     },
     requireOperator: requireOp,
     requireInternal: requireInt
+  });
+
+  // Sourced advice: read-only over the profile, no execution capability.
+  registerAdviceRoutes(app, {
+    repo: {
+      getProfile: () => repo!.getProfile(),
+      saveAdvice: (input) => repo!.saveAdvice(input)
+    },
+    requireOperator: requireOp
   });
 
   app.get("/status", { preHandler: requireOp }, async () => ({

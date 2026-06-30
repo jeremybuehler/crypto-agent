@@ -184,6 +184,10 @@ export const InternalObservationSchema = z
 // Advice (U.S.-only, sourced, never executable)
 // ---------------------------------------------------------------------------
 
+export const AdviceRequestSchema = z
+  .object({ question: z.string().min(1).max(MAX_TEXT_LEN) })
+  .strict();
+
 export const AdviceResponseSchema = z
   .object({
     id: z.string().uuid(),

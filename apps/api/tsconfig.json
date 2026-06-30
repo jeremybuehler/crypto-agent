@@ -6,6 +6,7 @@
     "outDir": "dist"
   },
   "references": [
+    { "path": "../../packages/ai" },
     { "path": "../../packages/core" },
     { "path": "../../packages/execution" },
     { "path": "../../packages/persistence" },
