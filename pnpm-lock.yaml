@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@agent/core':
+        specifier: workspace:*
+        version: link:packages/core
       '@fastify/cors':
         specifier: ^10.0.2
         version: 10.1.0

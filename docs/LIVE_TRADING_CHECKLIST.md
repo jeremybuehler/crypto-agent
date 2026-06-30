@@ -20,3 +20,7 @@
 - [ ] Supported dashboard breakpoints pass visual-regression and critical-flow end-to-end tests.
 - [ ] Operator accepts that this system can lose money.
 - [ ] `LIVE_TRADING_ACK=true` is set only for the deployment intended to trade.
+- [ ] `pnpm live:preflight` exits 0 — every gate passes (mode, ack, notional ceiling, Coinbase creds, strong/distinct tokens, durable state, Redis, alert webhook, clean reconciliation).
+- [ ] A read-only reconciliation has run and `RECONCILIATION_OK=true` reflects its clean result (not hand-set to pass the gate).
+- [ ] A recent backup has been restore-verified via `pnpm restore:verify` into a scratch database.
+- [ ] Alert webhook delivery has been tested end-to-end (kill switch emits a critical alert).

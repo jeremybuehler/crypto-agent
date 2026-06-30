@@ -4,6 +4,7 @@ import { z } from "zod";
 
 export * from "./telemetry.js";
 export * from "./alerts.js";
+export * from "./deployment.js";
 
 export const TradingModeSchema = z.enum(["paper", "sandbox", "live"]);
 export type TradingMode = z.infer<typeof TradingModeSchema>;

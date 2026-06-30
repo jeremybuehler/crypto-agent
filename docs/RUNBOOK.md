@@ -56,3 +56,34 @@ Live mode may compute and preview proposals automatically. Review the proposal's
 The learning APIs and dashboard controls are planned and must not be treated as implemented until their implementation-plan acceptance tests pass. They will support viewing and correcting the operator profile, accepting or rejecting inferred insights, exporting or deleting learning data, reviewing advice provenance, and approving or rejecting strategy/risk change proposals.
 
 If learning storage is unavailable, continue deterministic safety operations but disable profile updates and personalized advice. If profile facts conflict or become stale, resolve them before relying on personalized guidance. Never enter credentials, private keys, seed phrases, or API tokens into educational or profile fields.
+
+## Deployment and recovery (T6.9)
+
+**Production stack.** Build and run the least-privilege composition:
+
+```bash
+cp .env.example .env.production   # fill in secrets; never commit it
+docker compose -f infra/compose.production.yml up -d --build
+```
+
+Containers run as the non-root `node` user with read-only root filesystems and
+`no-new-privileges`. Postgres and Redis persist to named volumes. The API exposes
+`/health` (liveness) and `/health/ready` (dependency readiness; returns 503 when
+a dependency is down) for orchestrator probes.
+
+**Migrations** run via `pnpm db:migrate`, which applies every unapplied
+`NNN_*.sql` in order and records it in `schema_migrations` (idempotent).
+
+**Backups.** `pnpm backup [outDir]` runs a custom-format `pg_dump`, optionally
+`age`-encrypts it (`BACKUP_AGE_RECIPIENT`), and prints a sha256 checksum. Store
+backups off-host. **A backup is not trusted until restored:** periodically run
+`pnpm restore:verify <backup.dump> <scratchDatabaseUrl>` to restore into a
+disposable database and confirm the core tables exist with rows.
+
+**Going live.** `pnpm live:preflight` is the gate. It reads the environment and a
+read-only reconciliation result and exits non-zero unless EVERY check passes
+(live mode, `LIVE_TRADING_ACK=true`, notional within the bootstrap ceiling,
+Coinbase credentials, strong/distinct API tokens, durable state, Redis, an alert
+webhook, and a clean reconciliation). It cannot set the acknowledgement or bypass
+a failure — both are inputs it only reports on. `RECONCILIATION_OK=true` must be
+set by an out-of-band read-only reconciliation; the preflight never fabricates it.
