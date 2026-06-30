@@ -189,8 +189,11 @@ export function buildAIContextInsert(record: AIContextRecord) {
     values: [
       record.productId,
       record.timeframe,
-      record.input,
-      record.output,
+      // JSONB params must be JSON strings: node-postgres encodes a raw JS object
+      // acceptably but a JS array as a Postgres array literal, so stringify
+      // explicitly to be driver-agnostic and avoid 22P02 on jsonb columns.
+      JSON.stringify(record.input),
+      JSON.stringify(record.output),
       record.output.marketRegime,
       record.output.confidence,
       record.output.doNotTrade
@@ -244,8 +247,10 @@ export function buildRiskDecisionInsert(decision: RiskDecision) {
     values: [
       decision.intent.id,
       decision.approved,
-      decision.reasons,
-      decision.ruleResults,
+      // reasons / rule_results are arrays bound to jsonb columns; stringify so
+      // node-postgres sends JSON, not a Postgres array literal (see 22P02).
+      JSON.stringify(decision.reasons),
+      JSON.stringify(decision.ruleResults),
       decision.checkedAt
     ]
   };

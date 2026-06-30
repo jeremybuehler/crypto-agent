@@ -57,6 +57,11 @@ describe("persistence query builders", () => {
     expect(query.values[4]).toBe("trend");
     expect(query.values[5]).toBe(0.6);
     expect(query.values[6]).toBe(false);
+
+    // jsonb columns receive pre-serialized JSON strings (see risk decision test).
+    expect(typeof query.values[2]).toBe("string");
+    expect(typeof query.values[3]).toBe("string");
+    expect(JSON.parse(query.values[3] as string).marketRegime).toBe("trend");
   });
 
   it("builds trade intent and risk decision inserts", () => {
@@ -87,6 +92,14 @@ describe("persistence query builders", () => {
     expect(decisionQuery.text).toContain("INSERT INTO risk_decisions");
     expect(decisionQuery.values[0]).toBe(intent.id);
     expect(decisionQuery.values[1]).toBe(true);
+
+    // Regression: jsonb params must be pre-serialized JSON strings. node-postgres
+    // encodes a raw JS array as a Postgres array literal, which a jsonb column
+    // rejects with 22P02. Storing them as strings is driver-agnostic.
+    expect(typeof decisionQuery.values[2]).toBe("string");
+    expect(typeof decisionQuery.values[3]).toBe("string");
+    expect(JSON.parse(decisionQuery.values[2] as string)).toEqual(decision.reasons);
+    expect(JSON.parse(decisionQuery.values[3] as string)).toEqual(decision.ruleResults);
   });
 
   it("builds paper fill inserts", () => {
