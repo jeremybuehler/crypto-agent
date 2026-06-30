@@ -30,23 +30,27 @@ export interface Portfolio {
 }
 
 export interface Trade {
-  id: string;
+  fillId: string;
   productId: string;
   side: "BUY" | "SELL";
   quoteSizeUsd: number;
   price: number;
   baseSize: number;
   feeUsd: number;
-  strategyVersion: string;
   filledAt: string;
+}
+
+export interface TradeList {
+  trades: Trade[];
 }
 
 export interface Metrics {
   totalTrades: number;
   wins: number;
+  losses: number;
   totalFees: number;
   realizedPnl: number;
-  equityUsd: number;
+  equityUsd: number | null;
 }
 
 export async function fetcher<T>(url: string): Promise<T> {

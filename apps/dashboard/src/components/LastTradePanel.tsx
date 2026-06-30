@@ -51,8 +51,8 @@ export default function LastTradePanel({ trade }: Props) {
         <span className="text-terminal-dim">FEE</span>
         <span className="text-right text-terminal-red">${fmt(trade.feeUsd, 4)}</span>
 
-        <span className="text-terminal-dim">STRATEGY</span>
-        <span className="text-right text-terminal-dim text-xs truncate">{trade.strategyVersion}</span>
+        <span className="text-terminal-dim">FILL</span>
+        <span className="text-right text-terminal-dim text-xs truncate">{trade.fillId.slice(0, 8)}</span>
 
         <span className="text-terminal-dim">TIME</span>
         <span className="text-right text-terminal-dim">

@@ -34,7 +34,7 @@ export default function TradeFeed({ trades }: Props) {
             </thead>
             <tbody>
               {trades.map((t) => (
-                <tr key={t.id} className="border-b border-terminal-border/50 hover:bg-white/5 transition-colors">
+                <tr key={t.fillId} className="border-b border-terminal-border/50 hover:bg-white/5 transition-colors">
                   <td className="px-4 py-1.5 text-terminal-dim whitespace-nowrap">
                     {new Date(t.filledAt).toLocaleTimeString("en-US", { hour12: false })}
                   </td>

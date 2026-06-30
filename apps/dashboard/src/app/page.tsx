@@ -1,6 +1,6 @@
 "use client";
 import useSWR from "swr";
-import { fetcher, type Status, type Portfolio, type Trade, type Metrics } from "../lib/api";
+import { fetcher, type Status, type Portfolio, type TradeList, type Metrics } from "../lib/api";
 import Header from "../components/Header";
 import PortfolioPanel from "../components/PortfolioPanel";
 import LastTradePanel from "../components/LastTradePanel";
@@ -14,13 +14,14 @@ const POLL = 3000;
 export default function Dashboard() {
   const { data: status, mutate: mutateStatus } = useSWR<Status>("/api/status", fetcher, { refreshInterval: POLL });
   const { data: portfolio } = useSWR<Portfolio>("/api/portfolio", fetcher, { refreshInterval: POLL });
-  const { data: trades } = useSWR<Trade[]>("/api/trades", fetcher, { refreshInterval: POLL });
+  const { data: tradeList } = useSWR<TradeList>("/api/trades", fetcher, { refreshInterval: POLL });
   const { data: metrics } = useSWR<Metrics>("/api/metrics", fetcher, { refreshInterval: POLL });
 
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   useEffect(() => { if (status) setLastUpdated(new Date()); }, [status]);
 
-  const lastTrade = trades?.[0];
+  const trades = tradeList?.trades ?? [];
+  const lastTrade = trades[0];
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -35,7 +36,7 @@ export default function Dashboard() {
         </div>
 
         {/* Trade feed */}
-        <TradeFeed trades={trades ?? []} />
+        <TradeFeed trades={trades} />
 
         {/* Risk config */}
         <RiskConfig status={status} />
