@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main, production-readiness]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Unit + property tests (hermetic)
+        run: pnpm test:core
+      - name: Integration tests (embedded pglite, no external services)
+        run: pnpm test:integration
