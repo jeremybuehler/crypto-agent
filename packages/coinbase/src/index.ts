@@ -2,6 +2,9 @@ import type { AgentConfig } from "@agent/core";
 import type { Candle } from "@agent/market-data";
 import { SignJWT, importPKCS8 } from "jose";
 
+export * from "./schemas.js";
+export * from "./order-client.js";
+
 export interface CoinbaseRequestOptions {
   method: "GET" | "POST" | "PUT" | "DELETE";
   path: `/${string}`;
