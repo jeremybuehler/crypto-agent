@@ -11,7 +11,15 @@
  */
 import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
-import { loadConfig, LOG_REDACT_PATHS, type AgentConfig } from "@agent/core";
+import {
+  loadConfig,
+  LOG_REDACT_PATHS,
+  AlertDispatcher,
+  StdoutAlertSink,
+  WebhookAlertSink,
+  type AgentConfig,
+  type AlertSink
+} from "@agent/core";
 import { createOpsState, type OpsState } from "@agent/risk";
 import {
   createOperatorRepositoryForConfig,
@@ -20,6 +28,8 @@ import {
 } from "@agent/persistence";
 import { requireInternal, requireOperator } from "./auth.js";
 import { registerSecurity } from "./plugins/security.js";
+import { registerReadiness } from "./routes/health.js";
+import { registerPrometheus } from "./routes/metrics.js";
 import { ValidationError } from "./errors.js";
 import {
   AuditListResponseSchema,
@@ -29,6 +39,9 @@ import {
   TradeListResponseSchema,
   type PortfolioResponse
 } from "./contracts.js";
+
+const WORKER_ID = process.env.WORKER_ID ?? "worker-1";
+const HEARTBEAT_MAX_AGE_MS = 90_000;
 
 const EMPTY_PORTFOLIO: PortfolioResponse = {
   equityUsd: 0,
@@ -87,6 +100,20 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
   const requireOp = requireOperator(config.security.operatorApiToken);
   const requireInt = requireInternal(config.security.internalApiToken);
 
+  // Operational alerts: always to stdout; optionally to an authenticated webhook
+  // (ALERT_WEBHOOK_URL/ALERT_WEBHOOK_TOKEN). The dispatcher dedupes by alert id
+  // and isolates sink failures so one broken sink can't silence the others.
+  const alertSinks: AlertSink[] = [new StdoutAlertSink((line) => app.log.warn({ alert: line }, "alert"))];
+  if (process.env.ALERT_WEBHOOK_URL) {
+    alertSinks.push(
+      new WebhookAlertSink({
+        url: process.env.ALERT_WEBHOOK_URL,
+        ...(process.env.ALERT_WEBHOOK_TOKEN ? { token: process.env.ALERT_WEBHOOK_TOKEN } : {})
+      })
+    );
+  }
+  const alerts = new AlertDispatcher(alertSinks, (error) => app.log.error({ error }, "alert sink failed"));
+
   /** Record an immutable audit event for an operator action. */
   async function auditOperator(type: string, correlationId: string, summary: string): Promise<void> {
     await repo!.recordAuditEvent({
@@ -101,6 +128,28 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
 
   // Liveness is the only unauthenticated route and carries no secrets.
   app.get("/health", async () => ({ status: "ok" as const }));
+
+  // Readiness (unauthenticated, secret-free): DB/Redis/worker dependency health.
+  registerReadiness(app, {
+    repo: {
+      ping: () => repo!.ping(),
+      getWorkerHeartbeat: (id) => repo!.getWorkerHeartbeat(id)
+    },
+    opsState: { ping: () => opsState!.ping() },
+    tradingMode: config.tradingMode,
+    workerId: WORKER_ID,
+    heartbeatMaxAgeMs: HEARTBEAT_MAX_AGE_MS
+  });
+
+  // Prometheus exposition (operator auth) at /metrics/prom; JSON metrics at /metrics.
+  registerPrometheus(app, {
+    repo: {
+      getMetrics: () => repo!.getMetrics(),
+      getWorkerHeartbeat: (id) => repo!.getWorkerHeartbeat(id)
+    },
+    workerId: WORKER_ID,
+    requireOperator: requireOp
+  });
 
   app.get("/status", { preHandler: requireOp }, async () => ({
     mode: config.tradingMode,
@@ -174,6 +223,13 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
   app.post("/ops/kill-switch", { preHandler: requireOp }, async (request) => {
     await opsState!.setKillSwitchEnabled(true);
     await auditOperator("ops.kill_switch", request.id, "operator enabled the kill switch");
+    await alerts.dispatch({
+      id: `kill_switch:${request.id}`,
+      kind: "kill_switch",
+      severity: "critical",
+      summary: "Operator enabled the kill switch; trading is halted.",
+      at: new Date()
+    });
     return { killSwitchEnabled: true };
   });
 

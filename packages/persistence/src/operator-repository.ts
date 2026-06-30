@@ -92,6 +92,8 @@ export interface IngestHeartbeatInput {
 }
 
 export interface OperatorRepository {
+  /** Cheap connectivity probe for readiness checks. */
+  ping(): Promise<boolean>;
   getLatestPortfolio(): Promise<PortfolioSnapshot | null>;
   listRecentFills(limit: number): Promise<FillRow[]>;
   getMetrics(): Promise<RealizedMetrics & { equityUsd: number | null }>;
@@ -177,6 +179,15 @@ function rowToFill(row: Record<string, unknown>): FillRow {
 
 export class PostgresOperatorRepository implements OperatorRepository {
   constructor(private readonly executor: SqlExecutor) {}
+
+  async ping(): Promise<boolean> {
+    try {
+      await this.executor.query("SELECT 1");
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   async getLatestPortfolio(): Promise<PortfolioSnapshot | null> {
     const result = await this.executor.query(
@@ -343,6 +354,10 @@ export class InMemoryOperatorRepository implements OperatorRepository {
   /** Test seam: seed fills (the worker writes these via the audit chain). */
   seedFills(fills: FillRow[]): void {
     this.fills.push(...fills);
+  }
+
+  async ping(): Promise<boolean> {
+    return true;
   }
 
   async getLatestPortfolio(): Promise<PortfolioSnapshot | null> {

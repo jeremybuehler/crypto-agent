@@ -3,6 +3,8 @@ export interface OpsState {
   setKillSwitchEnabled(enabled: boolean): Promise<void>;
   getPaused(): Promise<boolean>;
   setPaused(paused: boolean): Promise<void>;
+  /** Cheap connectivity probe for readiness checks. */
+  ping(): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -14,6 +16,7 @@ export class InMemoryOpsState implements OpsState {
   async setKillSwitchEnabled(enabled: boolean) { this.killSwitch = enabled; }
   async getPaused() { return this.paused; }
   async setPaused(paused: boolean) { this.paused = paused; }
+  async ping() { return true; }
   async close() {}
 }
 
@@ -45,6 +48,15 @@ export class RedisOpsState implements OpsState {
 
   async setPaused(paused: boolean): Promise<void> {
     await this.client.set(RedisOpsState.PAUSE_KEY, paused ? "1" : "0");
+  }
+
+  async ping(): Promise<boolean> {
+    try {
+      await this.client.get(RedisOpsState.PAUSE_KEY);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async close(): Promise<void> {
