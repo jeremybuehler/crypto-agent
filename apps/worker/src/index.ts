@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { ClaudeAIContextProvider, ConservativeStubAIContextProvider, type AIContextProvider } from "@agent/ai";
 import { CoinbasePublicMarketData } from "@agent/coinbase";
 import { loadConfig, logger, type MarketSnapshot, type PortfolioState } from "@agent/core";
@@ -10,6 +11,11 @@ import { aiAssistedTrendStrategy } from "@agent/strategy";
 const config = loadConfig();
 const persistence = createPersistenceRepository(config.persistence);
 
+const WORKER_ID = process.env.WORKER_ID ?? "worker-1";
+const HEARTBEAT_TIMEOUT_MS = 5_000;
+const HEARTBEAT_MAX_ATTEMPTS = 3;
+let heartbeatVersion = 0;
+
 const initialPortfolio: PortfolioState = {
   equityUsd: 1_000,
   cashUsd: 1_000,
@@ -18,7 +24,23 @@ const initialPortfolio: PortfolioState = {
   positions: []
 };
 
+/**
+ * Run one trading loop, then report a heartbeat with the resulting portfolio.
+ * The heartbeat is the worker's durable liveness + portfolio signal; a loop
+ * failure still reports a `degraded` heartbeat before rethrowing.
+ */
 export async function runOnce(portfolio: PortfolioState = initialPortfolio): Promise<PortfolioState> {
+  try {
+    const result = await runTradingLoop(portfolio);
+    await postHeartbeat(result, "ok");
+    return result;
+  } catch (error) {
+    await postHeartbeat(portfolio, "degraded");
+    throw error;
+  }
+}
+
+async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState> {
   const productId = (config.enabledProducts[0] ?? "BTC-USD") as `${string}-${string}`;
   const { market, candles } = await loadMarketInputs(productId);
   await persistence.saveMarketSnapshot(market);
@@ -76,29 +98,63 @@ export async function runOnce(portfolio: PortfolioState = initialPortfolio): Pro
   await persistence.savePaperFill({ tradeIntentId: intent.id, fill: result.fill });
   logger.info({ intent, decision, fill: result.fill, portfolio: result.portfolio }, "Paper trade executed.");
 
+  return result.portfolio;
+}
+
+/**
+ * Report the worker's latest portfolio + status to the operator API's internal
+ * heartbeat route. Authenticated with the internal token, bounded by a timeout,
+ * retried with backoff, and a final failure is logged (never swallowed). Fills
+ * themselves are persisted directly (audit chain); this only conveys the
+ * portfolio snapshot and liveness, which live in no audit-chain table.
+ */
+export async function postHeartbeat(portfolio: PortfolioState, status: "ok" | "degraded"): Promise<void> {
   const apiUrl = process.env.AGENT_API_URL;
-  if (apiUrl) {
-    await fetch(`${apiUrl}/internal/fill`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        trade: {
-          id: result.fill.fillId,
-          productId: result.fill.productId,
-          side: result.fill.side,
-          quoteSizeUsd: result.fill.quoteSizeUsd,
-          price: result.fill.price,
-          baseSize: result.fill.baseSize,
-          feeUsd: result.fill.feeUsd,
-          strategyVersion: intent.strategyVersion,
-          filledAt: result.fill.filledAt.toISOString()
-        },
-        portfolio: result.portfolio
-      })
-    }).catch(() => {});
+  const token = config.security.internalApiToken;
+  if (!apiUrl) return;
+  if (!token) {
+    logger.warn("AGENT_API_URL is set but INTERNAL_API_TOKEN is not; skipping heartbeat.");
+    return;
   }
 
-  return result.portfolio;
+  heartbeatVersion += 1;
+  const payload = JSON.stringify({
+    workerId: WORKER_ID,
+    mode: config.tradingMode,
+    status,
+    version: heartbeatVersion,
+    correlationId: randomUUID(),
+    observedAt: new Date().toISOString(),
+    portfolio
+  });
+
+  for (let attempt = 1; attempt <= HEARTBEAT_MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HEARTBEAT_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${apiUrl}/internal/heartbeat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-internal-token": token },
+        body: payload,
+        signal: controller.signal
+      });
+      if (res.ok) return;
+      // 4xx are not retryable (bad token / payload); 5xx are.
+      if (res.status < 500) {
+        logger.error({ status: res.status }, "Heartbeat rejected by API; not retrying.");
+        return;
+      }
+      throw new Error(`heartbeat HTTP ${res.status}`);
+    } catch (error) {
+      if (attempt === HEARTBEAT_MAX_ATTEMPTS) {
+        logger.error({ error, attempts: attempt }, "Heartbeat failed after retries.");
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 }
 
 async function loadMarketInputs(productId: `${string}-${string}`): Promise<{ market: MarketSnapshot; candles: Candle[] }> {

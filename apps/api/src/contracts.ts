@@ -246,6 +246,75 @@ export const CancelOpenOrdersResponseSchema = z
   .strict();
 
 // ---------------------------------------------------------------------------
+// Portfolio, trades, metrics (durable operator state)
+// ---------------------------------------------------------------------------
+
+const PositionSchema = z
+  .object({
+    productId: ProductIdSchema,
+    baseSize: z.number(),
+    notionalUsd: z.number(),
+    exposurePct: z.number(),
+    averageEntryPrice: z.number()
+  })
+  .strict();
+
+export const PortfolioResponseSchema = z
+  .object({
+    equityUsd: z.number(),
+    cashUsd: z.number(),
+    dailyPnlPct: z.number(),
+    totalExposurePct: z.number(),
+    positions: z.array(PositionSchema).max(MAX_LIST_ITEMS)
+  })
+  .strict();
+
+export const FillSchema = z
+  .object({
+    fillId: z.string().uuid(),
+    productId: ProductIdSchema,
+    side: SideSchema,
+    quoteSizeUsd: z.number(),
+    price: z.number(),
+    baseSize: z.number(),
+    feeUsd: z.number(),
+    filledAt: IsoDateTimeSchema
+  })
+  .strict();
+
+export const TradeListResponseSchema = z
+  .object({ trades: z.array(FillSchema).max(MAX_LIST_ITEMS) })
+  .strict();
+
+export const MetricsResponseSchema = z
+  .object({
+    totalTrades: z.number().int().nonnegative(),
+    wins: z.number().int().nonnegative(),
+    losses: z.number().int().nonnegative(),
+    totalFees: z.number(),
+    realizedPnl: z.number(),
+    equityUsd: z.number().nullable()
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Worker heartbeat ingestion (internal, untrusted worker input)
+// ---------------------------------------------------------------------------
+
+export const HeartbeatIngestSchema = z
+  .object({
+    workerId: z.string().min(1).max(MAX_SHORT_TEXT_LEN),
+    mode: TradingModeSchema,
+    status: z.enum(["ok", "degraded", "down"]),
+    version: z.number().int().nonnegative(),
+    correlationId: z.string().uuid(),
+    observedAt: IsoDateTimeSchema,
+    portfolio: PortfolioResponseSchema,
+    detail: z.record(z.string(), z.unknown()).optional()
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
 // Audit
 // ---------------------------------------------------------------------------
 
@@ -259,6 +328,10 @@ export const AuditEventSchema = z
     summary: z.string().max(MAX_TEXT_LEN),
     metadata: z.record(z.string(), z.unknown()).optional()
   })
+  .strict();
+
+export const AuditListResponseSchema = z
+  .object({ events: z.array(AuditEventSchema).max(MAX_LIST_ITEMS) })
   .strict();
 
 // ---------------------------------------------------------------------------
@@ -278,3 +351,9 @@ export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 export type ApprovalResponse = z.infer<typeof ApprovalResponseSchema>;
 export type CancelOpenOrdersResponse = z.infer<typeof CancelOpenOrdersResponseSchema>;
 export type AuditEvent = z.infer<typeof AuditEventSchema>;
+export type PortfolioResponse = z.infer<typeof PortfolioResponseSchema>;
+export type Fill = z.infer<typeof FillSchema>;
+export type TradeListResponse = z.infer<typeof TradeListResponseSchema>;
+export type MetricsResponse = z.infer<typeof MetricsResponseSchema>;
+export type HeartbeatIngest = z.infer<typeof HeartbeatIngestSchema>;
+export type AuditListResponse = z.infer<typeof AuditListResponseSchema>;

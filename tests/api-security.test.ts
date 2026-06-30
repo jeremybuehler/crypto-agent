@@ -76,9 +76,9 @@ describe("operator and internal boundaries are isolated", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/internal/fill",
+      url: "/internal/heartbeat",
       headers: opAuth,
-      payload: { trade: {}, portfolio: {} }
+      payload: { workerId: "w1", portfolio: {} }
     });
     expect(res.statusCode).toBe(401);
     await app.close();
@@ -95,20 +95,15 @@ describe("operator and internal boundaries are isolated", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/internal/fill",
+      url: "/internal/heartbeat",
       headers: intAuth,
       payload: {
-        trade: {
-          id: "t1",
-          productId: "BTC-USD",
-          side: "BUY",
-          quoteSizeUsd: 25,
-          price: 60000,
-          baseSize: 0.0004,
-          feeUsd: 0.1,
-          strategyVersion: "v1",
-          filledAt: new Date().toISOString()
-        },
+        workerId: "worker-1",
+        mode: "paper",
+        status: "ok",
+        version: 1,
+        correlationId: "00000000-0000-4000-8000-000000000001",
+        observedAt: new Date().toISOString(),
         portfolio: { equityUsd: 1000, cashUsd: 975, dailyPnlPct: 0, totalExposurePct: 2, positions: [] }
       }
     });
@@ -146,7 +141,7 @@ describe("hardening: headers, body limits, malformed input, rate limits", () => 
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/internal/fill",
+      url: "/internal/heartbeat",
       headers: { ...intAuth, "content-type": "application/json" },
       payload: "{not json"
     });
@@ -159,7 +154,7 @@ describe("hardening: headers, body limits, malformed input, rate limits", () => 
     const app = await buildApp({ API_BODY_LIMIT_BYTES: "256" });
     const res = await app.inject({
       method: "POST",
-      url: "/internal/fill",
+      url: "/internal/heartbeat",
       headers: { ...intAuth, "content-type": "application/json" },
       payload: JSON.stringify({ blob: "z".repeat(2000) })
     });

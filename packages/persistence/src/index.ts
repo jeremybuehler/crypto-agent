@@ -1,12 +1,71 @@
 import type { AIContext, AIContextInput } from "@agent/ai";
 import type { MarketSnapshot, RiskDecision, TradeIntent } from "@agent/core";
 import type { SimulatedFill } from "@agent/execution";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 
+export * from "./sql-executor.js";
+export * from "./operator-repository.js";
+import { createPgExecutor, type SqlExecutor } from "./sql-executor.js";
+import {
+  InMemoryOperatorRepository,
+  PostgresOperatorRepository,
+  type OperatorRepository
+} from "./operator-repository.js";
+
 const { Pool } = pg;
+
+/**
+ * Build an operator repository from runtime config: a Postgres-backed repo when
+ * persistence is enabled, otherwise an in-memory repo (hermetic tests / dev).
+ */
+export function createOperatorRepositoryForConfig(options: {
+  enabled: boolean;
+  databaseUrl?: string | undefined;
+}): OperatorRepository {
+  if (!options.enabled) {
+    return new InMemoryOperatorRepository();
+  }
+  if (!options.databaseUrl) {
+    throw new Error("Persistence is enabled but DATABASE_URL was not provided.");
+  }
+  return new PostgresOperatorRepository(createPgExecutor(new Pool({ connectionString: options.databaseUrl })));
+}
+
+const MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../migrations");
+
+/**
+ * Apply every `NNN_*.sql` migration not yet recorded in `schema_migrations`, in
+ * filename order, each inside its own transaction. Idempotent: already-applied
+ * versions are skipped, so it is safe to run on every boot.
+ */
+export async function runMigrations(executor: SqlExecutor): Promise<void> {
+  await executor.exec(
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+       version TEXT PRIMARY KEY,
+       applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+     );`
+  );
+
+  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
+  const applied = await executor.query("SELECT version FROM schema_migrations");
+  const done = new Set(applied.rows.map((row) => row.version as string));
+
+  for (const file of files) {
+    const version = file.replace(/\.sql$/, "");
+    if (done.has(version)) continue;
+    const sql = await readFile(resolve(MIGRATIONS_DIR, file), "utf8");
+    // Migration files are multi-statement and all idempotent (IF NOT EXISTS),
+    // so exec the body, then record the version last. Re-running after a crash
+    // mid-file re-execs harmlessly and then records the version.
+    await executor.exec(sql);
+    await executor.query("INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING", [
+      version
+    ]);
+  }
+}
 
 export interface PersistenceRepository {
   migrate(): Promise<void>;
@@ -48,9 +107,7 @@ export class PostgresPersistenceRepository implements PersistenceRepository {
   }
 
   async migrate(): Promise<void> {
-    const migrationPath = resolve(dirname(fileURLToPath(import.meta.url)), "../migrations/001_trading_audit.sql");
-    const sql = await readFile(migrationPath, "utf8");
-    await this.pool.query(sql);
+    await runMigrations(createPgExecutor(this.pool));
   }
 
   async saveMarketSnapshot(snapshot: MarketSnapshot): Promise<void> {
