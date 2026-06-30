@@ -43,9 +43,10 @@ export function createPgliteExecutor(): PgliteExecutor {
     },
     async truncateAll() {
       await db.exec(
-        `TRUNCATE proposal_decisions, proposals, portfolio_snapshots, worker_heartbeats,
-                  audit_events, paper_fills, risk_decisions, trade_intents, ai_contexts,
-                  market_snapshots RESTART IDENTITY CASCADE;`
+        `TRUNCATE profile_memory_history, profile_memories, proposal_decisions, proposals,
+                  portfolio_snapshots, worker_heartbeats, audit_events, paper_fills,
+                  risk_decisions, trade_intents, ai_contexts, market_snapshots
+                  RESTART IDENTITY CASCADE;`
       );
     }
   };

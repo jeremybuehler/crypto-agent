@@ -31,6 +31,7 @@ import { registerSecurity } from "./plugins/security.js";
 import { registerReadiness } from "./routes/health.js";
 import { registerPrometheus } from "./routes/metrics.js";
 import { registerProposalRoutes } from "./routes/proposals.js";
+import { registerLearningRoutes } from "./routes/learning.js";
 import { ValidationError } from "./errors.js";
 import {
   AuditListResponseSchema,
@@ -160,6 +161,19 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
       listProposals: (limit, statuses) => repo!.listProposals(limit, statuses),
       decideProposal: (input) => repo!.decideProposal(input),
       recordAuditEvent: (event) => repo!.recordAuditEvent(event)
+    },
+    requireOperator: requireOp,
+    requireInternal: requireInt
+  });
+
+  // Inspectable learning memory: operator manages facts; worker submits insights.
+  registerLearningRoutes(app, {
+    repo: {
+      upsertMemory: (input) => repo!.upsertMemory(input),
+      getProfile: () => repo!.getProfile(),
+      correctMemory: (input) => repo!.correctMemory(input),
+      setMemoryStatus: (id, status, actor) => repo!.setMemoryStatus(id, status, actor),
+      exportMemories: () => repo!.exportMemories()
     },
     requireOperator: requireOp,
     requireInternal: requireInt

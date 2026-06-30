@@ -8,6 +8,7 @@ import pg from "pg";
 
 export * from "./sql-executor.js";
 export * from "./operator-repository.js";
+export * from "./learning-memory.js";
 import { createPgExecutor, type SqlExecutor } from "./sql-executor.js";
 import {
   InMemoryOperatorRepository,

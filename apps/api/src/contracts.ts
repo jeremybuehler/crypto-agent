@@ -163,6 +163,23 @@ export const ProfilePatchRequestSchema = z
   })
   .strict();
 
+export const ProfileCorrectRequestSchema = z
+  .object({
+    value: z.string().min(1).max(MAX_TEXT_LEN),
+    expectedVersion: z.number().int().nonnegative()
+  })
+  .strict();
+
+// Worker -> API: a derived observation that becomes a reviewable pending insight.
+export const InternalObservationSchema = z
+  .object({
+    key: z.string().min(1).max(MAX_SHORT_TEXT_LEN),
+    value: z.string().min(1).max(MAX_TEXT_LEN),
+    confidence: z.number().min(0).max(1),
+    source: z.string().min(1).max(MAX_SHORT_TEXT_LEN)
+  })
+  .strict();
+
 // ---------------------------------------------------------------------------
 // Advice (U.S.-only, sourced, never executable)
 // ---------------------------------------------------------------------------

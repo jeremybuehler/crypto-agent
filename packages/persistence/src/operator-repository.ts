@@ -15,6 +15,36 @@
 import { randomUUID } from "node:crypto";
 import { evaluateApproval, type OrderPreview, type ProposalStatus, type StoredProposal } from "@agent/execution";
 import type { SqlExecutor } from "./sql-executor.js";
+import {
+  assertNoSecret,
+  type CorrectMemoryInput,
+  type CorrectResult,
+  type LearnedMemory,
+  type MemoryScope,
+  type MemoryStatus,
+  type UpsertMemoryInput
+} from "./learning-memory.js";
+
+export interface ProfileView {
+  version: number;
+  facts: LearnedMemory[];
+  pendingInsights: LearnedMemory[];
+}
+
+function rowToMemory(row: Record<string, unknown>): LearnedMemory {
+  return {
+    id: row.id as string,
+    key: row.key as string,
+    value: row.value as string,
+    scope: row.scope as MemoryScope,
+    confidence: num(row.confidence),
+    source: row.source as string,
+    observedAt: date(row.observed_at),
+    version: num(row.version),
+    retentionUntil: row.retention_until === null ? null : date(row.retention_until),
+    status: row.status as MemoryStatus
+  };
+}
 
 export interface CreateProposalInput {
   id: string;
@@ -131,6 +161,11 @@ export interface OperatorRepository {
   getProposal(id: string): Promise<StoredProposal | null>;
   listProposals(limit: number, statuses?: ProposalStatus[]): Promise<StoredProposal[]>;
   decideProposal(input: DecideProposalInput): Promise<DecisionResult>;
+  upsertMemory(input: UpsertMemoryInput): Promise<LearnedMemory>;
+  getProfile(): Promise<ProfileView>;
+  correctMemory(input: CorrectMemoryInput): Promise<CorrectResult>;
+  setMemoryStatus(id: string, status: MemoryStatus, actor: "operator" | "worker" | "system"): Promise<boolean>;
+  exportMemories(): Promise<LearnedMemory[]>;
   close(): Promise<void>;
 }
 
@@ -454,6 +489,98 @@ export class PostgresOperatorRepository implements OperatorRepository {
     });
   }
 
+  async upsertMemory(input: UpsertMemoryInput): Promise<LearnedMemory> {
+    assertNoSecret(input.key, input.value);
+    return this.executor.transaction(async (tx) => {
+      const existing = await tx.query("SELECT * FROM profile_memories WHERE key = $1 FOR UPDATE", [input.key]);
+      const prev = existing.rows[0];
+      let memory: LearnedMemory;
+      if (prev) {
+        const updated = await tx.query(
+          `UPDATE profile_memories
+              SET value = $2, scope = $3, confidence = $4, source = $5, observed_at = $6,
+                  status = $7, retention_until = $8, version = version + 1, updated_at = now()
+            WHERE key = $1
+            RETURNING *`,
+          [input.key, input.value, input.scope, input.confidence, input.source, input.observedAt, input.status, input.retentionUntil ?? null]
+        );
+        memory = rowToMemory(updated.rows[0]!);
+        await this.appendHistory(tx, memory.id, "observed", prev.value as string, input.value, input.actor);
+      } else {
+        const inserted = await tx.query(
+          `INSERT INTO profile_memories (key, value, scope, confidence, source, observed_at, status, retention_until)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING *`,
+          [input.key, input.value, input.scope, input.confidence, input.source, input.observedAt, input.status, input.retentionUntil ?? null]
+        );
+        memory = rowToMemory(inserted.rows[0]!);
+        await this.appendHistory(tx, memory.id, "created", null, input.value, input.actor);
+      }
+      return memory;
+    });
+  }
+
+  async getProfile(): Promise<ProfileView> {
+    const result = await this.executor.query(
+      "SELECT * FROM profile_memories WHERE status IN ('active', 'pending') ORDER BY updated_at DESC"
+    );
+    const memories = result.rows.map(rowToMemory);
+    const version = memories.reduce((max, m) => Math.max(max, m.version), 0);
+    return {
+      version,
+      facts: memories.filter((m) => m.status === "active"),
+      pendingInsights: memories.filter((m) => m.status === "pending")
+    };
+  }
+
+  async correctMemory(input: CorrectMemoryInput): Promise<CorrectResult> {
+    assertNoSecret("value", input.value);
+    return this.executor.transaction(async (tx) => {
+      const found = await tx.query("SELECT * FROM profile_memories WHERE id = $1 FOR UPDATE", [input.id]);
+      const row = found.rows[0];
+      if (!row) return { ok: false, reason: "not_found" };
+      if (num(row.version) !== input.expectedVersion) return { ok: false, reason: "version_conflict" };
+      const updated = await tx.query(
+        `UPDATE profile_memories SET value = $2, status = 'active', version = version + 1, updated_at = now()
+          WHERE id = $1 RETURNING version`,
+        [input.id, input.value]
+      );
+      await this.appendHistory(tx, input.id, "corrected", row.value as string, input.value, input.actor);
+      return { ok: true, version: num(updated.rows[0]!.version) };
+    });
+  }
+
+  async setMemoryStatus(id: string, status: MemoryStatus, actor: "operator" | "worker" | "system"): Promise<boolean> {
+    return this.executor.transaction(async (tx) => {
+      const found = await tx.query("SELECT value FROM profile_memories WHERE id = $1 FOR UPDATE", [id]);
+      if (!found.rows[0]) return false;
+      await tx.query("UPDATE profile_memories SET status = $2, updated_at = now() WHERE id = $1", [id, status]);
+      const changeType = status === "rejected" ? "rejected" : status === "deleted" ? "deleted" : "corrected";
+      await this.appendHistory(tx, id, changeType, found.rows[0].value as string, null, actor);
+      return true;
+    });
+  }
+
+  async exportMemories(): Promise<LearnedMemory[]> {
+    const result = await this.executor.query("SELECT * FROM profile_memories ORDER BY created_at ASC");
+    return result.rows.map(rowToMemory);
+  }
+
+  private async appendHistory(
+    tx: { query(text: string, values?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> },
+    memoryId: string,
+    changeType: string,
+    oldValue: string | null,
+    newValue: string | null,
+    actor: string
+  ): Promise<void> {
+    await tx.query(
+      `INSERT INTO profile_memory_history (memory_id, change_type, old_value, new_value, actor)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [memoryId, changeType, oldValue, newValue, actor]
+    );
+  }
+
   async close(): Promise<void> {
     await this.executor.close();
   }
@@ -469,6 +596,7 @@ export class InMemoryOperatorRepository implements OperatorRepository {
   private heartbeats = new Map<string, WorkerHeartbeat>();
   private audit: AuditEventRow[] = [];
   private proposals = new Map<string, StoredProposal>();
+  private memories = new Map<string, LearnedMemory>();
 
   /** Test seam: seed fills (the worker writes these via the audit chain). */
   seedFills(fills: FillRow[]): void {
@@ -564,6 +692,55 @@ export class InMemoryOperatorRepository implements OperatorRepository {
     }
     this.proposals.set(input.proposalId, { ...proposal, status: input.decision });
     return { ok: true, status: input.decision, decidedAt: input.now };
+  }
+
+  async upsertMemory(input: UpsertMemoryInput): Promise<LearnedMemory> {
+    assertNoSecret(input.key, input.value);
+    const existing = [...this.memories.values()].find((m) => m.key === input.key);
+    const memory: LearnedMemory = {
+      id: existing?.id ?? randomUUID(),
+      key: input.key,
+      value: input.value,
+      scope: input.scope,
+      confidence: input.confidence,
+      source: input.source,
+      observedAt: input.observedAt,
+      version: (existing?.version ?? 0) + 1,
+      retentionUntil: input.retentionUntil ?? null,
+      status: input.status
+    };
+    this.memories.set(memory.id, memory);
+    return memory;
+  }
+
+  async getProfile(): Promise<ProfileView> {
+    const memories = [...this.memories.values()].filter((m) => m.status === "active" || m.status === "pending");
+    return {
+      version: memories.reduce((max, m) => Math.max(max, m.version), 0),
+      facts: memories.filter((m) => m.status === "active"),
+      pendingInsights: memories.filter((m) => m.status === "pending")
+    };
+  }
+
+  async correctMemory(input: CorrectMemoryInput): Promise<CorrectResult> {
+    assertNoSecret("value", input.value);
+    const memory = this.memories.get(input.id);
+    if (!memory) return { ok: false, reason: "not_found" };
+    if (memory.version !== input.expectedVersion) return { ok: false, reason: "version_conflict" };
+    const updated = { ...memory, value: input.value, status: "active" as MemoryStatus, version: memory.version + 1 };
+    this.memories.set(input.id, updated);
+    return { ok: true, version: updated.version };
+  }
+
+  async setMemoryStatus(id: string, status: MemoryStatus): Promise<boolean> {
+    const memory = this.memories.get(id);
+    if (!memory) return false;
+    this.memories.set(id, { ...memory, status });
+    return true;
+  }
+
+  async exportMemories(): Promise<LearnedMemory[]> {
+    return [...this.memories.values()];
   }
 
   async close(): Promise<void> {}
