@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@agent/ai": "workspace:*",
+    "@agent/coinbase": "workspace:*",
     "@agent/core": "workspace:*",
     "@agent/execution": "workspace:*",
     "@agent/persistence": "workspace:*",

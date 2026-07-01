@@ -60,6 +60,9 @@ importers:
       '@agent/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@agent/coinbase':
+        specifier: workspace:*
+        version: link:../../packages/coinbase
       '@agent/core':
         specifier: workspace:*
         version: link:../../packages/core

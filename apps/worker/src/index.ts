@@ -24,6 +24,11 @@ const initialPortfolio: PortfolioState = {
   positions: []
 };
 
+// Last fill time, tracked across loop iterations so the risk engine can enforce
+// MIN_SECONDS_BETWEEN_TRADES. The loop interval is only the sampling cadence;
+// trade spacing is governed here.
+let lastFillAt: Date | undefined;
+
 /**
  * Run one trading loop, then report a heartbeat with the resulting portfolio.
  * The heartbeat is the worker's durable liveness + portfolio signal; a loop
@@ -81,7 +86,13 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
   }
   await persistence.saveTradeIntent(intent);
 
-  const decision = evaluateRisk({ config, intent, portfolio, killSwitchEnabled: false });
+  const decision = evaluateRisk({
+    config,
+    intent,
+    portfolio,
+    killSwitchEnabled: false,
+    ...(lastFillAt ? { lastTradeAt: lastFillAt } : {})
+  });
   await persistence.saveRiskDecision(decision);
   if (!decision.approved) {
     logger.warn({ intent, decision }, "Trade intent rejected by risk engine.");
@@ -97,12 +108,15 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
   // The simulation-only auto-fill below stays the default for tests/backtests.
   if (config.execution.interactiveApproval) {
     await postProposal(intent, market);
+    // Reserve the trade slot so we don't spam identical proposals every loop.
+    lastFillAt = new Date();
     return portfolio;
   }
 
   const broker = new PaperBroker();
   const result = broker.execute(decision, market, portfolio);
   await persistence.savePaperFill({ tradeIntentId: intent.id, fill: result.fill });
+  lastFillAt = result.fill.filledAt;
   logger.info({ intent, decision, fill: result.fill, portfolio: result.portfolio }, "Paper trade executed.");
 
   return result.portfolio;
@@ -269,7 +283,8 @@ function sampleMarketInputs(productId: `${string}-${string}`): { market: MarketS
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const loopMs = Number(process.env.WORKER_LOOP_MS ?? "0");
+  // `--once` forces a single run even when WORKER_LOOP_MS is configured.
+  const loopMs = process.argv.includes("--once") ? 0 : Number(process.env.WORKER_LOOP_MS ?? "0");
   try {
     await persistence.migrate();
     if (loopMs > 0) {

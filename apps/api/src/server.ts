@@ -24,8 +24,10 @@ import { createOpsState, type OpsState } from "@agent/risk";
 import {
   createOperatorRepositoryForConfig,
   type FillRow,
-  type OperatorRepository
+  type OperatorRepository,
+  type PriceCandle
 } from "@agent/persistence";
+import { CoinbasePublicMarketData } from "@agent/coinbase";
 import { requireInternal, requireOperator } from "./auth.js";
 import { registerSecurity } from "./plugins/security.js";
 import { registerReadiness } from "./routes/health.js";
@@ -105,6 +107,25 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
 
   const requireOp = requireOperator(config.security.operatorApiToken);
   const requireInt = requireInternal(config.security.internalApiToken);
+
+  // Live market-data source for the price chart (public, no auth). Only created
+  // when not in sample mode. Candles are cached briefly to bound external calls.
+  const marketData = config.coinbase.useSampleMarketData ? null : new CoinbasePublicMarketData(config.coinbase);
+  const candleCache = new Map<string, { at: number; candles: PriceCandle[] }>();
+  const CANDLE_TTL_MS = 15_000;
+  async function liveCandles(productId: string, limit: number): Promise<PriceCandle[]> {
+    const cached = candleCache.get(productId);
+    if (cached && Date.now() - cached.at < CANDLE_TTL_MS) return cached.candles.slice(-limit);
+    try {
+      const raw = await marketData!.getCandles({ productId: productId as `${string}-${string}`, granularity: "ONE_MINUTE", limit });
+      const candles: PriceCandle[] = raw.map((c) => ({ time: c.start.getTime(), open: c.open, high: c.high, low: c.low, close: c.close }));
+      candleCache.set(productId, { at: Date.now(), candles });
+      return candles;
+    } catch (error) {
+      app.log.warn({ error }, "live candle fetch failed; serving cached/empty");
+      return cached?.candles.slice(-limit) ?? [];
+    }
+  }
 
   // Operational alerts: always to stdout; optionally to an authenticated webhook
   // (ALERT_WEBHOOK_URL/ALERT_WEBHOOK_TOKEN). The dispatcher dedupes by alert id
@@ -213,8 +234,16 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
   app.get("/candles", { preHandler: requireOp }, async (request) => {
     const query = request.query as { product?: string; bucket?: string; limit?: string };
     const productId = query.product ?? config.enabledProducts[0] ?? "BTC-USD";
+    const limit = Math.min(300, Math.max(1, Number(query.limit ?? "60")));
+
+    // Live mode: real Coinbase 1-minute candles (cached briefly so a 3s dashboard
+    // poll doesn't hammer the public API). Sample mode: aggregate the agent's own
+    // market snapshots into buckets.
+    if (marketData) {
+      const candles = await liveCandles(productId, limit);
+      return CandlesResponseSchema.parse({ productId, bucketSeconds: 60, candles });
+    }
     const bucketSeconds = Math.min(3600, Math.max(5, Number(query.bucket ?? "20")));
-    const limit = Math.min(500, Math.max(1, Number(query.limit ?? "60")));
     const candles = await repo!.getCandles(productId, bucketSeconds, limit);
     return CandlesResponseSchema.parse({ productId, bucketSeconds, candles });
   });
