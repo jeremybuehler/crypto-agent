@@ -118,6 +118,15 @@ export interface RealizedMetrics {
   realizedPnl: number;
 }
 
+/** An OHLC candle aggregated from market snapshots. `time` is epoch millis. */
+export interface PriceCandle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
 export interface WorkerHeartbeat {
   workerId: string;
   lastSeenAt: Date;
@@ -155,6 +164,7 @@ export interface OperatorRepository {
   ping(): Promise<boolean>;
   getLatestPortfolio(): Promise<PortfolioSnapshot | null>;
   listRecentFills(limit: number): Promise<FillRow[]>;
+  getCandles(productId: string, bucketSeconds: number, limit: number): Promise<PriceCandle[]>;
   getMetrics(): Promise<RealizedMetrics & { equityUsd: number | null }>;
   getWorkerHeartbeat(workerId: string): Promise<WorkerHeartbeat | null>;
   recordAuditEvent(event: AuditEventInput): Promise<void>;
@@ -319,6 +329,32 @@ export class PostgresOperatorRepository implements OperatorRepository {
       [limit]
     );
     return result.rows.map(rowToFill);
+  }
+
+  async getCandles(productId: string, bucketSeconds: number, limit: number): Promise<PriceCandle[]> {
+    const result = await this.executor.query(
+      `SELECT (floor(extract(epoch FROM created_at) / $2) * $2)::bigint AS bucket,
+              (array_agg(price ORDER BY created_at ASC))[1]  AS open,
+              max(price) AS high,
+              min(price) AS low,
+              (array_agg(price ORDER BY created_at DESC))[1] AS close
+         FROM market_snapshots
+        WHERE product_id = $1
+        GROUP BY bucket
+        ORDER BY bucket DESC
+        LIMIT $3`,
+      [productId, bucketSeconds, limit]
+    );
+    // Query is newest-first for the limit; return oldest-first for charting.
+    return result.rows
+      .map((row) => ({
+        time: num(row.bucket) * 1000,
+        open: num(row.open),
+        high: num(row.high),
+        low: num(row.low),
+        close: num(row.close)
+      }))
+      .reverse();
   }
 
   async getMetrics(): Promise<RealizedMetrics & { equityUsd: number | null }> {
@@ -640,6 +676,11 @@ export class InMemoryOperatorRepository implements OperatorRepository {
 
   async listRecentFills(limit: number): Promise<FillRow[]> {
     return [...this.fills].sort((a, b) => b.filledAt.getTime() - a.filledAt.getTime()).slice(0, limit);
+  }
+
+  async getCandles(): Promise<PriceCandle[]> {
+    // Market snapshots are not tracked in the in-memory repo (hermetic tests).
+    return [];
   }
 
   async getMetrics(): Promise<RealizedMetrics & { equityUsd: number | null }> {

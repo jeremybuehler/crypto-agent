@@ -36,6 +36,7 @@ import { registerAdviceRoutes } from "./routes/advice.js";
 import { ValidationError } from "./errors.js";
 import {
   AuditListResponseSchema,
+  CandlesResponseSchema,
   HeartbeatIngestSchema,
   MetricsResponseSchema,
   PortfolioResponseSchema,
@@ -207,6 +208,15 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
   app.get("/trades", { preHandler: requireOp }, async () => {
     const fills = await repo!.listRecentFills(RECENT_LIMIT);
     return TradeListResponseSchema.parse({ trades: fills.map(toFillResponse) });
+  });
+
+  app.get("/candles", { preHandler: requireOp }, async (request) => {
+    const query = request.query as { product?: string; bucket?: string; limit?: string };
+    const productId = query.product ?? config.enabledProducts[0] ?? "BTC-USD";
+    const bucketSeconds = Math.min(3600, Math.max(5, Number(query.bucket ?? "20")));
+    const limit = Math.min(500, Math.max(1, Number(query.limit ?? "60")));
+    const candles = await repo!.getCandles(productId, bucketSeconds, limit);
+    return CandlesResponseSchema.parse({ productId, bucketSeconds, candles });
   });
 
   app.get("/metrics", { preHandler: requireOp }, async () => {

@@ -329,6 +329,24 @@ export const TradeListResponseSchema = z
   .object({ trades: z.array(FillSchema).max(MAX_LIST_ITEMS) })
   .strict();
 
+export const CandleSchema = z
+  .object({
+    time: z.number().int().nonnegative(),
+    open: z.number(),
+    high: z.number(),
+    low: z.number(),
+    close: z.number()
+  })
+  .strict();
+
+export const CandlesResponseSchema = z
+  .object({
+    productId: ProductIdSchema,
+    bucketSeconds: z.number().int().positive(),
+    candles: z.array(CandleSchema).max(1000)
+  })
+  .strict();
+
 export const MetricsResponseSchema = z
   .object({
     totalTrades: z.number().int().nonnegative(),

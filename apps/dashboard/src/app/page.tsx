@@ -1,11 +1,12 @@
 "use client";
 import useSWR from "swr";
-import { fetcher, type Status, type Portfolio, type TradeList, type Metrics, type ProposalList } from "../lib/api";
+import { fetcher, type Status, type Portfolio, type TradeList, type Metrics, type ProposalList, type CandlesResponse } from "../lib/api";
 import Header from "../components/Header";
 import PortfolioPanel from "../components/PortfolioPanel";
 import LastTradePanel from "../components/LastTradePanel";
 import OpsPanel from "../components/OpsPanel";
 import ProposalsPanel from "../components/ProposalsPanel";
+import CandleChart from "../components/CandleChart";
 import TradeFeed from "../components/TradeFeed";
 import RiskConfig from "../components/RiskConfig";
 import { useState, useEffect } from "react";
@@ -18,6 +19,9 @@ export default function Dashboard() {
   const { data: tradeList } = useSWR<TradeList>("/api/trades", fetcher, { refreshInterval: POLL });
   const { data: metrics } = useSWR<Metrics>("/api/metrics", fetcher, { refreshInterval: POLL });
   const { data: proposalList, mutate: mutateProposals } = useSWR<ProposalList>("/api/proposals", fetcher, {
+    refreshInterval: POLL
+  });
+  const { data: candleData } = useSWR<CandlesResponse>("/api/candles?bucket=20&limit=60", fetcher, {
     refreshInterval: POLL
   });
 
@@ -38,6 +42,14 @@ export default function Dashboard() {
           <LastTradePanel trade={lastTrade} />
           <OpsPanel status={status} onMutate={() => mutateStatus()} />
         </div>
+
+        {/* Price chart with trade markers */}
+        <CandleChart
+          candles={candleData?.candles ?? []}
+          trades={trades}
+          productId={candleData?.productId ?? "BTC-USD"}
+          bucketSeconds={candleData?.bucketSeconds ?? 20}
+        />
 
         {/* Pending approvals */}
         <ProposalsPanel proposals={proposalList?.proposals ?? []} onDecision={() => mutateProposals()} />

@@ -55,6 +55,20 @@ export interface Metrics {
   equityUsd: number | null;
 }
 
+export interface Candle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export interface CandlesResponse {
+  productId: string;
+  bucketSeconds: number;
+  candles: Candle[];
+}
+
 export interface OrderPreview {
   productId: string;
   side: "BUY" | "SELL";
