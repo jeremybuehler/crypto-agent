@@ -1,4 +1,5 @@
 import type { MarketSnapshot, ProductId } from "@agent/core";
+export * from "./indicators.js";
 
 export interface Candle {
   productId: ProductId;

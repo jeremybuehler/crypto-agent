@@ -4,6 +4,8 @@ import { SystemClock } from "@agent/core";
 import type { FeatureSnapshot } from "@agent/market-data";
 import { randomUUID } from "node:crypto";
 
+export * from "./strategies.js";
+
 export const STRATEGY_VERSION = "ai-assisted-trend-v1";
 
 export interface StrategyInput {

@@ -6,7 +6,7 @@ import { PaperBroker, previewOrder } from "@agent/execution";
 import { computeFeatures, type Candle } from "@agent/market-data";
 import { createPersistenceRepository } from "@agent/persistence";
 import { evaluateRisk } from "@agent/risk";
-import { aiAssistedTrendStrategy } from "@agent/strategy";
+import { createStrategy, runStrategy } from "@agent/strategy";
 
 const config = loadConfig();
 const persistence = createPersistenceRepository(config.persistence);
@@ -79,9 +79,10 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
     output: aiContext
   });
 
-  const intent = aiAssistedTrendStrategy({ config, features, aiContext, portfolio });
+  const strategy = createStrategy(config.strategy.name);
+  const intent = runStrategy(strategy, { candles, market, portfolio, config, aiContext });
   if (!intent) {
-    logger.info({ productId: market.productId, features, aiContext }, "No trade intent generated.");
+    logger.info({ productId: market.productId, strategy: strategy.name, features, aiContext }, "No trade intent generated.");
     return portfolio;
   }
   await persistence.saveTradeIntent(intent);
@@ -231,7 +232,7 @@ async function loadMarketInputs(productId: `${string}-${string}`): Promise<{ mar
   try {
     const [market, candles] = await Promise.all([
       marketData.getBestBidAsk(productId),
-      marketData.getCandles({ productId, granularity: "ONE_MINUTE", limit: 20 })
+      marketData.getCandles({ productId, granularity: "ONE_MINUTE", limit: 100 })
     ]);
 
     if (candles.length < 5) {
@@ -245,31 +246,32 @@ async function loadMarketInputs(productId: `${string}-${string}`): Promise<{ mar
   }
 }
 
+const SAMPLE_CANDLES = 60;
+const SAMPLE_PERIOD = 20; // candles per oscillation cycle
+
 function sampleMarketInputs(productId: `${string}-${string}`): { market: MarketSnapshot; candles: Candle[] } {
-  // Oscillating sample market so a continuous paper loop produces both uptrends
-  // (BUY) and downtrend reversals (SELL) — otherwise the loop plateaus at the
-  // exposure cap. A ~40s cycle keeps the dashboard visibly moving.
-  const phase = Date.now() / 6_000;
-  const wave = Math.sin(phase);
-  const base = 100 * (1 + 0.06 * wave);
-  const slope = Math.cos(phase); // rising when > 0
-  const step = base * 0.012 * Math.sign(slope || 1);
-  const closes = [4, 3, 2, 1, 0].map((back) => base - step * back);
+  // A smooth, index-based sine oscillation gives the real strategies enough
+  // history (>=26 bars) with genuine uptrends, reversals, and range breaks. The
+  // window drifts one bar per minute so a continuous loop keeps moving.
+  const offset = Math.floor(Date.now() / 60_000);
+  const closes = Array.from({ length: SAMPLE_CANDLES }, (_, i) =>
+    100 * (1 + 0.05 * Math.sin(((offset + i) * 2 * Math.PI) / SAMPLE_PERIOD))
+  );
 
   const candles: Candle[] = closes.map((close, i) => {
-    const open = i === 0 ? close - step : closes[i - 1]!;
+    const open = i === 0 ? close : closes[i - 1]!;
     return {
       productId,
-      start: new Date(Date.now() - (5 - i) * 60_000),
+      start: new Date(Date.now() - (SAMPLE_CANDLES - i) * 60_000),
       open,
       high: Math.max(open, close) * 1.002,
       low: Math.min(open, close) * 0.998,
       close,
-      volume: 10 + i
+      volume: 10 + (i % 5)
     };
   });
 
-  const price = base;
+  const price = closes[closes.length - 1]!;
   const market: MarketSnapshot = {
     productId,
     price,

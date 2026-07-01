@@ -53,6 +53,9 @@ const envSchema = z.object({
   COINBASE_REST_BASE_URL: z.string().url().default("https://api.coinbase.com/api/v3/brokerage"),
   COINBASE_SANDBOX_REST_BASE_URL: z.string().url().default("https://api-sandbox.coinbase.com/api/v3/brokerage"),
   USE_SAMPLE_MARKET_DATA: booleanFromEnv.default("false"),
+  // Which strategy the worker runs. Names must match the strategy registry in
+  // @agent/strategy (kept as a literal here to avoid a package cycle).
+  STRATEGY: z.enum(["trend", "mean-reversion", "breakout"]).default("trend"),
   PERSISTENCE_ENABLED: booleanFromEnv.default("true"),
   DATABASE_URL: z.string().url().optional(),
   OPERATOR_API_TOKEN: z.string().optional(),
@@ -147,6 +150,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     execution: {
       interactiveApproval: parsed.INTERACTIVE_APPROVAL,
       proposalTtlSeconds: parsed.PROPOSAL_TTL_SECONDS
+    },
+    strategy: {
+      name: parsed.STRATEGY
     },
     security: {
       operatorApiToken: parsed.OPERATOR_API_TOKEN,
