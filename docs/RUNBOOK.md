@@ -59,17 +59,38 @@ If learning storage is unavailable, continue deterministic safety operations but
 
 ## Deployment and recovery (T6.9)
 
-**Production stack.** Build and run the least-privilege composition:
+**Production stack.** Build and run the least-privilege composition — five
+services: `postgres`, `redis`, `api` (:3000), `worker` (loop), `dashboard`
+(:4000):
 
 ```bash
-cp .env.example .env.production   # fill in secrets; never commit it
+cp .env.example infra/.env.production   # fill in secrets; never commit it
 docker compose -f infra/compose.production.yml up -d --build
 ```
 
 Containers run as the non-root `node` user with read-only root filesystems and
-`no-new-privileges`. Postgres and Redis persist to named volumes. The API exposes
-`/health` (liveness) and `/health/ready` (dependency readiness; returns 503 when
-a dependency is down) for orchestrator probes.
+`no-new-privileges`. Postgres and Redis persist to named volumes. The dashboard
+is a Next.js standalone image; the API exposes `/health` (liveness) and
+`/health/ready` (dependency readiness; returns 503 when a dependency is down) for
+orchestrator probes.
+
+**Compose env (`infra/.env.production`).** Inside the compose network, services
+reach each other by service name — not `localhost`. Override these from the
+`.env.example` defaults:
+
+```env
+DATABASE_URL=postgresql://crypto_agent:<pw>@postgres:5432/crypto_agent
+REDIS_URL=redis://redis:6379
+AGENT_API_URL=http://api:3000        # dashboard + worker -> API
+POSTGRES_USER=crypto_agent
+POSTGRES_PASSWORD=<pw>
+POSTGRES_DB=crypto_agent
+WORKER_LOOP_MS=20000                 # 0 = single pass; >0 = continuous loop
+# plus OPERATOR_API_TOKEN, INTERNAL_API_TOKEN, ALLOWED_ORIGINS, STRATEGY, etc.
+```
+
+The operator token stays server-side: the dashboard's proxy attaches it, so it
+never reaches the browser.
 
 **Migrations** run via `pnpm db:migrate`, which applies every unapplied
 `NNN_*.sql` in order and records it in `schema_migrations` (idempotent).

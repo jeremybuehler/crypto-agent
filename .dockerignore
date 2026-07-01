@@ -1,0 +1,16 @@
+# Keep the build context small and secret-free. Deps are installed from the
+# lockfile inside the image; env files carry secrets and must never be baked in.
+**/node_modules
+**/dist
+**/.next
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+.snapshots
+backups
+**/.DS_Store
+docs
+tests
