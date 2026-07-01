@@ -38,6 +38,8 @@ export interface Trade {
   baseSize: number;
   feeUsd: number;
   filledAt: string;
+  reasonCode: string | null;
+  rationale: string | null;
 }
 
 export interface TradeList {

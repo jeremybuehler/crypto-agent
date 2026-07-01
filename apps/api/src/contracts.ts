@@ -319,7 +319,9 @@ export const FillSchema = z
     price: z.number(),
     baseSize: z.number(),
     feeUsd: z.number(),
-    filledAt: IsoDateTimeSchema
+    filledAt: IsoDateTimeSchema,
+    reasonCode: z.string().max(MAX_SHORT_TEXT_LEN).nullable(),
+    rationale: z.string().max(MAX_TEXT_LEN).nullable()
   })
   .strict();
 

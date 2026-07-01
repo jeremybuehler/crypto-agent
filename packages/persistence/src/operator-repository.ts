@@ -105,6 +105,9 @@ export interface FillRow {
   baseSize: number;
   feeUsd: number;
   filledAt: Date;
+  /** Why this trade happened, from the originating trade intent. */
+  reasonCode: string | null;
+  rationale: string | null;
 }
 
 export interface RealizedMetrics {
@@ -264,7 +267,9 @@ function rowToFill(row: Record<string, unknown>): FillRow {
     price: num(row.price),
     baseSize: num(row.base_size),
     feeUsd: num(row.fee_usd),
-    filledAt: date(row.filled_at)
+    filledAt: date(row.filled_at),
+    reasonCode: (row.reason_code as string | undefined) ?? null,
+    rationale: (row.rationale as string | undefined) ?? null
   };
 }
 
@@ -305,9 +310,11 @@ export class PostgresOperatorRepository implements OperatorRepository {
 
   async listRecentFills(limit: number): Promise<FillRow[]> {
     const result = await this.executor.query(
-      `SELECT id, product_id, side, quote_size_usd, price, base_size, fee_usd, filled_at
-         FROM paper_fills
-        ORDER BY filled_at DESC
+      `SELECT f.id, f.product_id, f.side, f.quote_size_usd, f.price, f.base_size, f.fee_usd, f.filled_at,
+              i.reason_code, i.rationale
+         FROM paper_fills f
+         LEFT JOIN trade_intents i ON i.id = f.trade_intent_id
+        ORDER BY f.filled_at DESC
         LIMIT $1`,
       [limit]
     );

@@ -65,7 +65,9 @@ function toFillResponse(fill: FillRow) {
     price: fill.price,
     baseSize: fill.baseSize,
     feeUsd: fill.feeUsd,
-    filledAt: fill.filledAt.toISOString()
+    filledAt: fill.filledAt.toISOString(),
+    reasonCode: fill.reasonCode,
+    rationale: fill.rationale
   };
 }
 

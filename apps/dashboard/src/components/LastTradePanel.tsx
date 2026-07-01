@@ -51,13 +51,18 @@ export default function LastTradePanel({ trade }: Props) {
         <span className="text-terminal-dim">FEE</span>
         <span className="text-right text-terminal-red">${fmt(trade.feeUsd, 4)}</span>
 
-        <span className="text-terminal-dim">FILL</span>
-        <span className="text-right text-terminal-dim text-xs truncate">{trade.fillId.slice(0, 8)}</span>
-
         <span className="text-terminal-dim">TIME</span>
         <span className="text-right text-terminal-dim">
           {new Date(trade.filledAt).toLocaleTimeString("en-US", { hour12: false })}
         </span>
+      </div>
+
+      <div className="border-t border-terminal-border pt-2 flex flex-col gap-1">
+        <span className="text-terminal-dim text-xs tracking-widest uppercase">Rationale</span>
+        <span className="text-terminal-text text-xs">
+          {(trade.reasonCode ?? "unknown").replace(/_/g, " ")}
+        </span>
+        {trade.rationale && <span className="text-terminal-dim text-xs leading-snug">{trade.rationale}</span>}
       </div>
     </div>
   );

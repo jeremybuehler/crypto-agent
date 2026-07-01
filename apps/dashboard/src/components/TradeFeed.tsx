@@ -5,6 +5,10 @@ function fmt(n: number, d = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
+function reason(t: { reasonCode: string | null }) {
+  return (t.reasonCode ?? "—").replace(/_/g, " ");
+}
+
 interface Props { trades: Trade[]; }
 
 export default function TradeFeed({ trades }: Props) {
@@ -29,12 +33,13 @@ export default function TradeFeed({ trades }: Props) {
                 <th className="text-left px-2 py-1 font-normal">PRODUCT</th>
                 <th className="text-right px-2 py-1 font-normal hidden sm:table-cell">NOTIONAL</th>
                 <th className="text-right px-2 py-1 font-normal">PRICE</th>
-                <th className="text-right px-4 py-1 font-normal hidden md:table-cell">FEE</th>
+                <th className="text-right px-2 py-1 font-normal hidden lg:table-cell">FEE</th>
+                <th className="text-left px-4 py-1 font-normal hidden md:table-cell">WHY</th>
               </tr>
             </thead>
             <tbody>
               {trades.map((t) => (
-                <tr key={t.fillId} className="border-b border-terminal-border/50 hover:bg-white/5 transition-colors">
+                <tr key={t.fillId} title={t.rationale ?? undefined} className="border-b border-terminal-border/50 hover:bg-white/5 transition-colors">
                   <td className="px-4 py-1.5 text-terminal-dim whitespace-nowrap">
                     {new Date(t.filledAt).toLocaleTimeString("en-US", { hour12: false })}
                   </td>
@@ -48,8 +53,11 @@ export default function TradeFeed({ trades }: Props) {
                   <td className="px-2 py-1.5 text-right text-terminal-text">
                     ${fmt(t.price, 2)}
                   </td>
-                  <td className="px-4 py-1.5 text-right text-terminal-red hidden md:table-cell">
+                  <td className="px-2 py-1.5 text-right text-terminal-red hidden lg:table-cell">
                     ${fmt(t.feeUsd, 4)}
+                  </td>
+                  <td className="px-4 py-1.5 text-terminal-dim hidden md:table-cell whitespace-nowrap" title={t.rationale ?? undefined}>
+                    {reason(t)}
                   </td>
                 </tr>
               ))}

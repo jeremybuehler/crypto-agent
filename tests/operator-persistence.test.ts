@@ -18,6 +18,8 @@ function fill(overrides: Partial<FillRow>): FillRow {
     baseSize: 1,
     feeUsd: 0,
     filledAt: new Date("2026-06-01T00:00:00.000Z"),
+    reasonCode: null,
+    rationale: null,
     ...overrides
   };
 }
@@ -250,6 +252,9 @@ describe("PostgresOperatorRepository (pglite-backed)", () => {
     expect(fills.length).toBe(2);
     expect(fills[0]?.side).toBe("SELL");
     expect(fills[0]?.price).toBeCloseTo(120, 6);
+    // Each fill carries the rationale of the intent that produced it.
+    expect(fills[0]?.reasonCode).toBe("test");
+    expect(fills[0]?.rationale).toBe("test");
   });
 
   it("appends idempotent audit events", async () => {
