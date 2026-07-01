@@ -14,6 +14,7 @@
     "dev:worker": "tsx apps/worker/src/index.ts",
     "dev:dashboard": "cd apps/dashboard && pnpm dev",
     "paper:once": "tsx apps/worker/src/index.ts --once",
+    "paper:loop": "WORKER_LOOP_MS=3000 tsx apps/worker/src/index.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "backtest": "tsx apps/worker/src/backtest.ts",
     "live:preflight": "tsx scripts/live-preflight.ts",

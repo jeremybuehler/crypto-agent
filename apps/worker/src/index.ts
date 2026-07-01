@@ -232,31 +232,65 @@ async function loadMarketInputs(productId: `${string}-${string}`): Promise<{ mar
 }
 
 function sampleMarketInputs(productId: `${string}-${string}`): { market: MarketSnapshot; candles: Candle[] } {
+  // Oscillating sample market so a continuous paper loop produces both uptrends
+  // (BUY) and downtrend reversals (SELL) — otherwise the loop plateaus at the
+  // exposure cap. A ~40s cycle keeps the dashboard visibly moving.
+  const phase = Date.now() / 6_000;
+  const wave = Math.sin(phase);
+  const base = 100 * (1 + 0.06 * wave);
+  const slope = Math.cos(phase); // rising when > 0
+  const step = base * 0.012 * Math.sign(slope || 1);
+  const closes = [4, 3, 2, 1, 0].map((back) => base - step * back);
+
+  const candles: Candle[] = closes.map((close, i) => {
+    const open = i === 0 ? close - step : closes[i - 1]!;
+    return {
+      productId,
+      start: new Date(Date.now() - (5 - i) * 60_000),
+      open,
+      high: Math.max(open, close) * 1.002,
+      low: Math.min(open, close) * 0.998,
+      close,
+      volume: 10 + i
+    };
+  });
+
+  const price = base;
   const market: MarketSnapshot = {
     productId,
-    price: 101,
-    bid: 100.95,
-    ask: 101.05,
+    price,
+    bid: price * 0.9995,
+    ask: price * 1.0005,
     spreadBps: 10,
     timestamp: new Date()
   };
 
-  return {
-    market,
-    candles: [
-      { productId, start: new Date(Date.now() - 5 * 60_000), open: 98, high: 100, low: 97, close: 98, volume: 10 },
-      { productId, start: new Date(Date.now() - 4 * 60_000), open: 98, high: 101, low: 98, close: 99, volume: 11 },
-      { productId, start: new Date(Date.now() - 3 * 60_000), open: 99, high: 102, low: 99, close: 100, volume: 12 },
-      { productId, start: new Date(Date.now() - 2 * 60_000), open: 100, high: 103, low: 100, close: 101, volume: 13 },
-      { productId, start: new Date(Date.now() - 1 * 60_000), open: 101, high: 104, low: 100, close: 102, volume: 14 }
-    ]
-  };
+  return { market, candles };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
+  const loopMs = Number(process.env.WORKER_LOOP_MS ?? "0");
   try {
     await persistence.migrate();
-    await runOnce();
+    if (loopMs > 0) {
+      // Continuous mode: carry portfolio state across iterations so equity,
+      // positions, and realized PnL evolve. Ctrl-C / SIGTERM to stop.
+      let portfolio = initialPortfolio;
+      let running = true;
+      process.on("SIGINT", () => (running = false));
+      process.on("SIGTERM", () => (running = false));
+      logger.info({ loopMs }, "Worker loop started.");
+      while (running) {
+        try {
+          portfolio = await runOnce(portfolio);
+        } catch (error) {
+          logger.error({ error }, "Loop iteration failed; continuing.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, loopMs));
+      }
+    } else {
+      await runOnce();
+    }
   } catch (error) {
     logger.error({ error }, "Worker failed.");
     process.exitCode = 1;
