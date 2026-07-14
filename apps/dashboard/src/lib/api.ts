@@ -81,7 +81,15 @@ export interface OrderPreview {
 
 export interface Proposal {
   id: string;
-  status: "pending" | "approved" | "rejected" | "expired" | "executed" | "cancelled";
+  status:
+    | "pending"
+    | "approved"
+    | "rejected"
+    | "expired"
+    | "executed"
+    | "cancelled"
+    | "executing"
+    | "execution_failed";
   preview: OrderPreview;
   digest: string;
   createdAt: string;

@@ -63,4 +63,34 @@ describe("config loader", () => {
       loadConfig({ ...validPaperEnv, MAX_TRADE_NOTIONAL_USD: "not-a-number" })
     ).toThrow();
   });
+
+  it("refuses sandbox mode without INTERACTIVE_APPROVAL (no auto-fill outside paper)", () => {
+    expect(() =>
+      loadConfig({
+        ...validPaperEnv,
+        TRADING_MODE: "sandbox",
+        COINBASE_API_KEY_NAME: "key",
+        COINBASE_API_PRIVATE_KEY: "pk"
+        // INTERACTIVE_APPROVAL omitted -> defaults false
+      })
+    ).toThrow("INTERACTIVE_APPROVAL=true");
+  });
+
+  it("refuses sandbox mode without Coinbase credentials", () => {
+    expect(() =>
+      loadConfig({ ...validPaperEnv, TRADING_MODE: "sandbox", INTERACTIVE_APPROVAL: "true" })
+    ).toThrow("COINBASE_API_KEY_NAME");
+  });
+
+  it("loads sandbox mode with approval + creds and points at the sandbox endpoint", () => {
+    const config = loadConfig({
+      ...validPaperEnv,
+      TRADING_MODE: "sandbox",
+      INTERACTIVE_APPROVAL: "true",
+      COINBASE_API_KEY_NAME: "key",
+      COINBASE_API_PRIVATE_KEY: "pk"
+    });
+    expect(config.tradingMode).toBe("sandbox");
+    expect(config.coinbase.restBaseUrl).toContain("api-sandbox.coinbase.com");
+  });
 });

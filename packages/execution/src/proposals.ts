@@ -21,7 +21,17 @@ export interface OrderPreview {
   estimatedSlippageBps: number;
 }
 
-export type ProposalStatus = "pending" | "approved" | "rejected" | "expired" | "executed" | "cancelled";
+export type ProposalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "executed"
+  | "cancelled"
+  // Worker-owned execution lifecycle. `executing` is the atomically-claimed
+  // in-flight/in-doubt state; `execution_failed` is a terminal known failure.
+  | "executing"
+  | "execution_failed";
 
 export interface StoredProposal {
   id: string;

@@ -298,13 +298,13 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [crypto-
 - **Files to touch:** `packages/execution/src/order-preview.ts`, `packages/execution/src/approval-service.ts`, `packages/execution/src/execution-engine.ts`, persistence schema/repository, API routes, tests
 - **Scope:** Per [TECH_SPEC.md §5.6-5.7] and [INTERACTION_POLICY.md](./INTERACTION_POLICY.md). Always preview when `requireOrderPreview=true`. Persist a proposal and require a single-use operator approval before live submission. Idempotency via `clientOrderId`.
 - **Acceptance:**
-  - [ ] Preview-rejected orders never reach `createOrder`
-  - [ ] `clientOrderId` is generated and persisted BEFORE network call
-  - [ ] Live proposals stop in `awaiting_operator_approval`; no background path submits them
-  - [ ] Missing, expired, reused, rejected, malformed, and hash-mismatched approvals never reach `createOrder`
-  - [ ] Approval claim/consumption is concurrency-safe and audit-attributed
-  - [ ] Paper and sandbox behavior remains automated
-  - [ ] Sandbox integration test exercises preview → create → cancel happy path
+  - [x] Preview-rejected orders never reach `createOrder`
+  - [x] `clientOrderId` is generated and persisted BEFORE network call (the proposal's persisted id is the client_order_id)
+  - [x] Live proposals stop in `awaiting_operator_approval`; no background path submits them
+  - [x] Missing, expired, reused, rejected, malformed, and hash-mismatched approvals never reach `createOrder`
+  - [x] Approval claim/consumption is concurrency-safe (`FOR UPDATE SKIP LOCKED`) and audit-attributed
+  - [x] Paper behavior remains automated; sandbox (real exchange orders) goes through the operator approval gate — the worker never auto-fills outside paper
+  - [ ] Sandbox integration test exercises preview → create → cancel happy path (preview → create + fill parse covered; cancel step not yet exercised)
 
 ### T5.2 — Alerts
 - **Depends on:** T4.3, T4.4

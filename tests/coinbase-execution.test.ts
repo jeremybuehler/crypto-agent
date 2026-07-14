@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CoinbaseOrderClient, CoinbaseExecutionError } from "@agent/coinbase";
+import { CoinbaseOrderClient, CoinbaseExecutionError, formatAmount } from "@agent/coinbase";
 
 const order = { clientOrderId: "cid-1", productId: "BTC-USD", side: "BUY" as const, quoteSizeUsd: 25 };
 
@@ -36,6 +36,10 @@ describe("CoinbaseOrderClient", () => {
     });
     const client = new CoinbaseOrderClient(request);
     await client.createOrder(order);
+    // Preview must NOT carry client_order_id — Coinbase rejects it there (HTTP 400).
+    const previewBody = request.mock.calls[0][0].body as Record<string, unknown>;
+    expect(previewBody).not.toHaveProperty("client_order_id");
+    // Create must carry it for idempotency.
     const createBody = request.mock.calls[1][0].body as { client_order_id: string };
     expect(createBody.client_order_id).toBe("cid-1");
   });
@@ -74,5 +78,46 @@ describe("CoinbaseOrderClient", () => {
     const cancel = await client.cancelOrders(["o1", "o2"]);
     expect(cancel.cancelled).toEqual(["o1"]);
     expect(cancel.failed).toEqual(["o2"]);
+  });
+
+  it("specifies a market SELL by base_size, not quote_size", async () => {
+    const request = vi.fn(async (opts: { path: string; body?: unknown }) => {
+      if (opts.path === "/orders/preview") return cleanPreview;
+      return { success: true, success_response: { order_id: "sell-1" } };
+    });
+    const client = new CoinbaseOrderClient(request);
+    await client.createOrder({ clientOrderId: "cid-sell", productId: "BTC-USD", side: "SELL", quoteSizeUsd: 25, baseSize: 0.0004 });
+    const createBody = request.mock.calls[1][0].body as { order_configuration: { market_market_ioc: Record<string, string> } };
+    const marketConfig = createBody.order_configuration.market_market_ioc;
+    expect(marketConfig.base_size).toBe("0.0004");
+    expect(marketConfig.quote_size).toBeUndefined();
+  });
+
+  it("refuses a market SELL without a base size", async () => {
+    const client = new CoinbaseOrderClient(async () => cleanPreview);
+    await expect(
+      client.createOrder({ clientOrderId: "cid", productId: "BTC-USD", side: "SELL", quoteSizeUsd: 25 })
+    ).rejects.toBeInstanceOf(CoinbaseExecutionError);
+  });
+
+  it("scopes getFills to a single order and filters client-side", async () => {
+    const request = vi.fn(async () => ({
+      fills: [
+        { order_id: "want", product_id: "BTC-USD", price: "100", size: "0.5", commission: "0.1", side: "BUY" },
+        { order_id: "other", product_id: "BTC-USD", price: "100", size: "0.5", commission: "0.1", side: "BUY" }
+      ]
+    }));
+    const client = new CoinbaseOrderClient(request);
+    const fills = await client.getFills("want");
+    expect(request.mock.calls[0][0].path).toContain("order_id=want");
+    expect(fills).toHaveLength(1);
+    expect(fills[0]?.order_id).toBe("want");
+  });
+
+  it("formats amounts without scientific notation or over-precision", () => {
+    expect(formatAmount(25, 2)).toBe("25");
+    expect(formatAmount(25.5, 2)).toBe("25.5");
+    expect(formatAmount(0.00004, 8)).toBe("0.00004");
+    expect(formatAmount(0.000000001, 8)).toBe("0"); // below 8dp rounds to zero, no exponent
   });
 });

@@ -37,19 +37,52 @@ export interface OrderRequest {
   clientOrderId: string;
   productId: string;
   side: "BUY" | "SELL";
+  /** Quote (USD) size — used for BUY market orders. */
   quoteSizeUsd: number;
+  /** Base (crypto) size — required for SELL market orders (see below). */
+  baseSize?: number;
+}
+
+/**
+ * Format a decimal amount as a plain string for Coinbase (no scientific
+ * notation, no over-precision that trips increment rules). Coinbase applies
+ * product-specific increments; these ceilings are conservative defaults —
+ * quote in cents, base to 8dp — and the sandbox smoke test validates the exact
+ * shape per product.
+ */
+export function formatAmount(value: number, maxDecimals: number): string {
+  if (!Number.isFinite(value)) throw new CoinbaseExecutionError("formatAmount", "Non-finite order amount.");
+  const fixed = value.toFixed(maxDecimals);
+  // Trim trailing zeros / a dangling decimal point.
+  return fixed.includes(".") ? fixed.replace(/\.?0+$/, "") : fixed;
 }
 
 export class CoinbaseOrderClient {
   constructor(private readonly request: CoinbaseRequestFn) {}
 
+  /**
+   * The product/side/size body shared by preview and create. It deliberately
+   * omits `client_order_id`: the Coinbase `/orders/preview` endpoint rejects that
+   * field ("unknown field client_order_id", HTTP 400). `createOrder` adds it for
+   * the `/orders` call, which requires it for idempotency.
+   */
   private orderConfiguration(order: OrderRequest) {
-    // Market order by quote size (spot only). Coinbase expects string amounts.
+    // Market IOC, spot only. Coinbase expects string amounts. A market BUY is
+    // specified by quote_size (USD); a market SELL by base_size (crypto), which
+    // is the convention Advanced Trade accepts for reducing a position.
+    let marketConfig: { quote_size: string } | { base_size: string };
+    if (order.side === "SELL") {
+      if (order.baseSize === undefined) {
+        throw new CoinbaseExecutionError("orderConfiguration", "A market SELL requires baseSize.");
+      }
+      marketConfig = { base_size: formatAmount(order.baseSize, 8) };
+    } else {
+      marketConfig = { quote_size: formatAmount(order.quoteSizeUsd, 2) };
+    }
     return {
-      client_order_id: order.clientOrderId,
       product_id: order.productId,
       side: order.side,
-      order_configuration: { market_market_ioc: { quote_size: order.quoteSizeUsd.toString() } }
+      order_configuration: { market_market_ioc: marketConfig }
     };
   }
 
@@ -69,7 +102,11 @@ export class CoinbaseOrderClient {
    */
   async createOrder(order: OrderRequest): Promise<{ orderId: string }> {
     await this.previewOrder(order);
-    const raw = await this.call("createOrder", { method: "POST", path: "/orders", body: this.orderConfiguration(order) });
+    const raw = await this.call("createOrder", {
+      method: "POST",
+      path: "/orders",
+      body: { client_order_id: order.clientOrderId, ...this.orderConfiguration(order) }
+    });
     const result = CreateOrderResponseSchema.parse(raw);
     if (!result.success || !result.success_response) {
       throw new CoinbaseExecutionError("createOrder", "Coinbase rejected the order.");
@@ -90,9 +127,19 @@ export class CoinbaseOrderClient {
     return ListOrdersResponseSchema.parse(raw).orders;
   }
 
-  async getFills(): Promise<CoinbaseFill[]> {
-    const raw = await this.call("getFills", { method: "GET", path: "/orders/historical/fills" });
-    return ListFillsResponseSchema.parse(raw).fills;
+  /**
+   * Fetch fills, optionally scoped to one order. IOC market orders settle as one
+   * or more fills; callers aggregate them for the executed price/size/fee. The
+   * endpoint has no order filter guarantee across API versions, so we also
+   * filter client-side by order_id as a backstop.
+   */
+  async getFills(orderId?: string): Promise<CoinbaseFill[]> {
+    const path = orderId
+      ? (`/orders/historical/fills?order_id=${encodeURIComponent(orderId)}&limit=100` as const)
+      : ("/orders/historical/fills" as const);
+    const raw = await this.call("getFills", { method: "GET", path });
+    const fills = ListFillsResponseSchema.parse(raw).fills;
+    return orderId ? fills.filter((fill) => fill.order_id === orderId) : fills;
   }
 
   async getAccounts() {

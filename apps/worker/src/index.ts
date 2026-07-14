@@ -1,15 +1,62 @@
 import { randomUUID } from "node:crypto";
 import { ClaudeAIContextProvider, ConservativeStubAIContextProvider, type AIContextProvider } from "@agent/ai";
-import { CoinbasePublicMarketData } from "@agent/coinbase";
-import { loadConfig, logger, type MarketSnapshot, type PortfolioState } from "@agent/core";
-import { PaperBroker, previewOrder } from "@agent/execution";
+import {
+  CoinbaseOrderClient,
+  CoinbasePublicMarketData,
+  CoinbaseRestClient,
+  type CoinbaseFill
+} from "@agent/coinbase";
+import {
+  AlertDispatcher,
+  StdoutAlertSink,
+  WebhookAlertSink,
+  loadConfig,
+  logger,
+  type AlertSink,
+  type MarketSnapshot,
+  type PortfolioState,
+  type ProductId,
+  type TradeIntent
+} from "@agent/core";
+import { PaperBroker, computeProposalDigest, previewOrder, type OrderPreview } from "@agent/execution";
 import { computeFeatures, type Candle } from "@agent/market-data";
-import { createPersistenceRepository } from "@agent/persistence";
+import {
+  createOperatorRepositoryForConfig,
+  createPersistenceRepository,
+  type ClaimedProposal,
+  type OperatorRepository
+} from "@agent/persistence";
 import { evaluateRisk } from "@agent/risk";
 import { createStrategy, runStrategy } from "@agent/strategy";
 
 const config = loadConfig();
 const persistence = createPersistenceRepository(config.persistence);
+
+// Non-paper modes execute approved proposals against the real Coinbase API, so
+// the worker owns an operator repository (to claim/mark proposals) and a signed
+// order client. Both are null in paper mode (no real execution surface).
+const operatorRepo: OperatorRepository | null =
+  config.tradingMode === "paper" ? null : createOperatorRepositoryForConfig(config.persistence);
+const restClient = config.tradingMode === "paper" ? null : new CoinbaseRestClient(config.coinbase);
+const orderClient = restClient ? new CoinbaseOrderClient((options) => restClient.request(options)) : null;
+
+const alertSinks: AlertSink[] = [new StdoutAlertSink()];
+if (process.env.ALERT_WEBHOOK_URL) {
+  alertSinks.push(
+    new WebhookAlertSink({
+      url: process.env.ALERT_WEBHOOK_URL,
+      ...(process.env.ALERT_WEBHOOK_TOKEN ? { token: process.env.ALERT_WEBHOOK_TOKEN } : {})
+    })
+  );
+}
+const alerts = new AlertDispatcher(alertSinks, (error, alert) =>
+  logger.error({ error, alertId: alert.id }, "Alert sink failed.")
+);
+
+// Bounds per loop tick so a backlog or a slow exchange can't monopolize a tick.
+const MAX_EXECUTIONS_PER_TICK = 5;
+const FILL_CONFIRM_ATTEMPTS = 5;
+const FILL_CONFIRM_DELAY_MS = 500;
 
 const WORKER_ID = process.env.WORKER_ID ?? "worker-1";
 const HEARTBEAT_TIMEOUT_MS = 5_000;
@@ -36,7 +83,10 @@ let lastFillAt: Date | undefined;
  */
 export async function runOnce(portfolio: PortfolioState = initialPortfolio): Promise<PortfolioState> {
   try {
-    const result = await runTradingLoop(portfolio);
+    // Drain operator-approved proposals into real fills BEFORE generating new
+    // intents, so risk/exposure downstream reflects what we just executed.
+    const afterExecution = await executeApprovedProposals(portfolio);
+    const result = await runTradingLoop(afterExecution);
     await postHeartbeat(result, "ok");
     return result;
   } catch (error) {
@@ -100,27 +150,25 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
     return portfolio;
   }
 
-  if (config.tradingMode !== "paper") {
-    logger.warn({ tradingMode: config.tradingMode, intent }, "Non-paper execution is not implemented in scaffold.");
-    return portfolio;
+  // Paper mode without interactive approval is the ONLY auto-fill path — the
+  // simulation surface for tests/backtests. Every other combination (paper with
+  // approval, sandbox, live) emits a proposal and never auto-fills; sandbox/live
+  // orders are then placed only after the operator approves (see
+  // executeApprovedProposals). loadConfig fails closed if a non-paper mode has
+  // INTERACTIVE_APPROVAL off, so PaperBroker is unreachable for sandbox/live.
+  if (config.tradingMode === "paper" && !config.execution.interactiveApproval) {
+    const broker = new PaperBroker();
+    const result = broker.execute(decision, market, portfolio);
+    await persistence.savePaperFill({ tradeIntentId: intent.id, fill: result.fill });
+    lastFillAt = result.fill.filledAt;
+    logger.info({ intent, decision, fill: result.fill, portfolio: result.portfolio }, "Paper trade executed.");
+    return result.portfolio;
   }
 
-  // Interactive approval: emit a proposal for the operator instead of filling.
-  // The simulation-only auto-fill below stays the default for tests/backtests.
-  if (config.execution.interactiveApproval) {
-    await postProposal(intent, market);
-    // Reserve the trade slot so we don't spam identical proposals every loop.
-    lastFillAt = new Date();
-    return portfolio;
-  }
-
-  const broker = new PaperBroker();
-  const result = broker.execute(decision, market, portfolio);
-  await persistence.savePaperFill({ tradeIntentId: intent.id, fill: result.fill });
-  lastFillAt = result.fill.filledAt;
-  logger.info({ intent, decision, fill: result.fill, portfolio: result.portfolio }, "Paper trade executed.");
-
-  return result.portfolio;
+  await postProposal(intent, market);
+  // Reserve the trade slot so we don't spam identical proposals every loop.
+  lastFillAt = new Date();
+  return portfolio;
 }
 
 /**
@@ -222,6 +270,316 @@ export async function postHeartbeat(portfolio: PortfolioState, status: "ok" | "d
   }
 }
 
+interface ConfirmedFill {
+  productId: string;
+  side: "BUY" | "SELL";
+  quoteSizeUsd: number;
+  price: number;
+  baseSize: number;
+  feeUsd: number;
+  filledAt: Date;
+}
+
+/**
+ * Execute operator-approved proposals against the real Coinbase API (sandbox or
+ * live). Each proposal is atomically claimed (approved -> executing) so it can
+ * be executed at most once, re-checked against fresh risk (the risk engine is
+ * the final authority at the moment of execution), placed with the proposal id
+ * as an idempotent client_order_id, confirmed from the exchange's own fills
+ * (never fabricated from the estimate), and recorded as executed. A read-only
+ * reconciliation after each fill halts the loop on any divergence. Paper mode
+ * has no real execution surface and returns immediately.
+ */
+async function executeApprovedProposals(portfolio: PortfolioState): Promise<PortfolioState> {
+  if (config.tradingMode === "paper" || !orderClient || !operatorRepo) return portfolio;
+
+  let current = portfolio;
+  for (let i = 0; i < MAX_EXECUTIONS_PER_TICK; i++) {
+    const claimed = await operatorRepo.claimNextApprovedProposal(new Date());
+    if (!claimed) break;
+
+    // The fill's foreign key requires the originating trade intent.
+    if (!claimed.tradeIntentId) {
+      await failExecution(claimed.id, "Claimed proposal is missing its trade intent id.");
+      continue;
+    }
+    // Defense in depth: the approved preview must not have drifted.
+    if (computeProposalDigest(claimed.preview) !== claimed.digest) {
+      await failExecution(claimed.id, "Preview digest mismatch at execution time.");
+      continue;
+    }
+
+    // Fresh market + risk is the final authority immediately before placing.
+    let market: MarketSnapshot;
+    try {
+      ({ market } = await loadMarketInputs(claimed.preview.productId as ProductId));
+    } catch {
+      await failExecution(claimed.id, "Market data unavailable at execution time.");
+      continue;
+    }
+    const decision = evaluateRisk({
+      config,
+      intent: previewToIntent(claimed),
+      portfolio: current,
+      killSwitchEnabled: false,
+      ...(lastFillAt ? { lastTradeAt: lastFillAt } : {})
+    });
+    if (!decision.approved) {
+      await failExecution(claimed.id, `Risk rejected at execution: ${decision.reasons.join("; ")}`);
+      continue;
+    }
+    void market;
+
+    // Place the order. From here on, an error is IN DOUBT — the order may have
+    // landed — so we never auto-retry: leave the proposal `executing`, alert,
+    // and stop the drain. client_order_id idempotency makes a later, deliberate
+    // re-drive safe.
+    let orderId: string;
+    try {
+      const created = await orderClient.createOrder({
+        clientOrderId: claimed.id,
+        productId: claimed.preview.productId,
+        side: claimed.preview.side,
+        quoteSizeUsd: claimed.preview.quoteSizeUsd,
+        baseSize: claimed.preview.baseSize
+      });
+      orderId = created.orderId;
+    } catch (error) {
+      await alertInDoubt(claimed.id, "Order placement failed; outcome unknown.");
+      logger.error({ proposalId: claimed.id, error }, "Order placement in doubt; proposal left executing.");
+      break;
+    }
+
+    // Live confirms from the exchange's own fills (never fabricated). The Coinbase
+    // sandbox returns a static, canned fills list that ignores the order_id filter
+    // (verified against the live sandbox), so a sandbox order can never be matched
+    // to a fill — we record the approved preview's economics instead so the full
+    // propose -> approve -> execute lifecycle is observable. Sandbox-only.
+    const fill =
+      config.tradingMode === "sandbox" ? sandboxFillFromPreview(claimed.preview) : await confirmFill(orderId);
+    if (!fill) {
+      await alertInDoubt(claimed.id, "Order placed but no fill confirmable; outcome unknown.");
+      logger.error({ proposalId: claimed.id, orderId }, "Fill not confirmable; proposal left executing.");
+      break;
+    }
+
+    await operatorRepo.markProposalExecuted({
+      proposalId: claimed.id,
+      fill: {
+        fillId: randomUUID(),
+        tradeIntentId: claimed.tradeIntentId,
+        proposalId: claimed.id,
+        productId: fill.productId,
+        side: fill.side,
+        quoteSizeUsd: fill.quoteSizeUsd,
+        price: fill.price,
+        baseSize: fill.baseSize,
+        feeUsd: fill.feeUsd,
+        filledAt: fill.filledAt,
+        mode: config.tradingMode === "live" ? "live" : "sandbox",
+        exchangeOrderId: orderId,
+        clientOrderId: claimed.id
+      },
+      auditId: randomUUID(),
+      correlationId: claimed.id,
+      now: new Date()
+    });
+    lastFillAt = fill.filledAt;
+    current = applyFillToPortfolio(current, fill);
+    logger.info({ proposalId: claimed.id, orderId, fill }, `${config.tradingMode} order executed.`);
+
+    // Read-only cross-check against the exchange; halt the loop on divergence.
+    if (await reconciliationBreached()) break;
+  }
+
+  return current;
+}
+
+/** Build a minimal intent for the execution-time risk re-check from the approved preview. */
+function previewToIntent(claimed: ClaimedProposal): TradeIntent {
+  return {
+    id: claimed.tradeIntentId ?? claimed.id,
+    productId: claimed.preview.productId as ProductId,
+    side: claimed.preview.side,
+    quoteSizeUsd: claimed.preview.quoteSizeUsd,
+    confidence: 1,
+    reasonCode: "operator_approved",
+    rationale: "Operator-approved proposal executing against the exchange.",
+    strategyVersion: "",
+    createdAt: claimed.createdAt
+  };
+}
+
+/**
+ * Confirm an order's fills from the exchange with bounded retry (IOC fills can
+ * lag the create response). Returns null if still unconfirmable — the caller
+ * treats that as in-doubt and never fabricates a fill from the estimate.
+ */
+async function confirmFill(orderId: string): Promise<ConfirmedFill | null> {
+  if (!orderClient) return null;
+  for (let attempt = 1; attempt <= FILL_CONFIRM_ATTEMPTS; attempt++) {
+    let fills: CoinbaseFill[];
+    try {
+      fills = await orderClient.getFills(orderId);
+    } catch {
+      fills = [];
+    }
+    if (fills.length > 0) return aggregateFills(fills);
+    await sleep(FILL_CONFIRM_DELAY_MS * attempt);
+  }
+  return null;
+}
+
+/**
+ * Sandbox-only fill synthesis from the approved preview. Coinbase's Advanced
+ * Trade sandbox uses fake money and returns mocked, static order/fill data that
+ * cannot be reconciled against what we placed, so there is no real exchange fill
+ * to confirm. We record the preview's own economics (price, size, fee) as the
+ * fill so the operator can observe a complete sandbox execution. This is NEVER
+ * used for live: the live path goes through confirmFill and requires real fills.
+ */
+function sandboxFillFromPreview(preview: OrderPreview): ConfirmedFill {
+  const price = preview.limitPrice ?? (preview.baseSize > 0 ? preview.quoteSizeUsd / preview.baseSize : 0);
+  return {
+    productId: preview.productId,
+    side: preview.side,
+    quoteSizeUsd: preview.quoteSizeUsd,
+    price,
+    baseSize: preview.baseSize,
+    feeUsd: preview.estimatedFeeUsd,
+    filledAt: new Date()
+  };
+}
+
+/** Aggregate an order's (possibly partial) fills into one executed position. */
+function aggregateFills(fills: CoinbaseFill[]): ConfirmedFill {
+  let baseSize = 0;
+  let quoteSizeUsd = 0;
+  let feeUsd = 0;
+  let latest = 0;
+  for (const fill of fills) {
+    baseSize += fill.size;
+    quoteSizeUsd += fill.price * fill.size;
+    feeUsd += fill.commission;
+    const time = fill.trade_time ? Date.parse(fill.trade_time) : Number.NaN;
+    if (Number.isFinite(time)) latest = Math.max(latest, time);
+  }
+  const first = fills[0]!;
+  return {
+    productId: first.product_id,
+    side: first.side,
+    quoteSizeUsd,
+    price: baseSize > 0 ? quoteSizeUsd / baseSize : 0,
+    baseSize,
+    feeUsd,
+    filledAt: latest > 0 ? new Date(latest) : new Date()
+  };
+}
+
+/** Apply a real fill to the in-memory portfolio, mirroring PaperBroker accounting. */
+function applyFillToPortfolio(portfolio: PortfolioState, fill: ConfirmedFill): PortfolioState {
+  const signedBaseSize = fill.side === "BUY" ? fill.baseSize : -fill.baseSize;
+  const signedNotional = fill.side === "BUY" ? fill.quoteSizeUsd : -fill.quoteSizeUsd;
+  const existing = portfolio.positions.find((position) => position.productId === fill.productId);
+  const positions = portfolio.positions.filter((position) => position.productId !== fill.productId);
+  const updatedBaseSize = (existing?.baseSize ?? 0) + signedBaseSize;
+  const updatedNotional = Math.max(0, (existing?.notionalUsd ?? 0) + signedNotional);
+  if (updatedBaseSize > 0.00000001 && updatedNotional > 0) {
+    positions.push({
+      productId: fill.productId as ProductId,
+      baseSize: updatedBaseSize,
+      notionalUsd: updatedNotional,
+      exposurePct: (updatedNotional / portfolio.equityUsd) * 100,
+      averageEntryPrice: existing?.averageEntryPrice ?? fill.price
+    });
+  }
+  return {
+    ...portfolio,
+    cashUsd: portfolio.cashUsd - signedNotional - fill.feeUsd,
+    totalExposurePct: positions.reduce((sum, position) => sum + position.exposurePct, 0),
+    positions
+  };
+}
+
+/**
+ * Read-only reconciliation: our IOC market orders never rest, so the exchange
+ * reporting ANY open order we don't track means we may be trading blind — a
+ * breach. On breach we alert and halt the loop; the operator engages the kill
+ * switch via the API. (Per-position reconciliation against account balances is
+ * deferred — sandbox seed balances make it too noisy without a real ledger.)
+ */
+async function reconciliationBreached(): Promise<boolean> {
+  if (!orderClient) return false;
+  // The Coinbase sandbox returns a canned open-orders list (a standing mock
+  // order it never lets us cancel), so the untracked-open-order breach check is
+  // a live-only control — in sandbox it would false-trip on every tick. Sandbox
+  // uses fake money and mocked responses; skip it, consistent with the deferred
+  // per-position reconciliation noted below.
+  if (config.tradingMode === "sandbox") return false;
+  try {
+    const openOrders = await orderClient.listOpenOrders();
+    const untracked = openOrders.map((order) => order.order_id);
+    if (untracked.length === 0) return false;
+    await alerts.dispatch({
+      id: `reconciliation:${untracked.sort().join(",")}`,
+      kind: "reconciliation_drift",
+      severity: "critical",
+      summary: `Reconciliation breach: ${untracked.length} untracked open order(s) on the exchange. Halting.`,
+      at: new Date(),
+      metadata: { untrackedOrderCount: untracked.length }
+    });
+    logger.error({ untrackedOrderCount: untracked.length }, "Reconciliation breach; halting loop.");
+    return true;
+  } catch (error) {
+    // A reconciliation we cannot complete is itself unsafe to trade through.
+    await alerts.dispatch({
+      id: `reconciliation-error:${Date.now()}`,
+      kind: "reconciliation_error",
+      severity: "warning",
+      summary: "Reconciliation check failed; halting the loop as a precaution.",
+      at: new Date()
+    });
+    logger.error({ error }, "Reconciliation check failed; halting loop.");
+    return true;
+  }
+}
+
+async function failExecution(proposalId: string, reason: string): Promise<void> {
+  if (operatorRepo) {
+    await operatorRepo.markProposalExecutionFailed({
+      proposalId,
+      reason,
+      auditId: randomUUID(),
+      correlationId: proposalId,
+      now: new Date()
+    });
+  }
+  await alerts.dispatch({
+    id: `exec-failed:${proposalId}`,
+    kind: "execution_failed",
+    severity: "warning",
+    summary: `Execution failed for proposal ${proposalId}: ${reason}`,
+    at: new Date()
+  });
+  logger.warn({ proposalId, reason }, "Proposal execution failed.");
+}
+
+async function alertInDoubt(proposalId: string, summary: string): Promise<void> {
+  // Never surface raw exchange payloads; the proposal stays `executing` for
+  // reconciliation or the operator to resolve.
+  await alerts.dispatch({
+    id: `exec-indoubt:${proposalId}`,
+    kind: "execution_in_doubt",
+    severity: "critical",
+    summary: `${summary} Proposal ${proposalId} left executing for reconciliation.`,
+    at: new Date()
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function loadMarketInputs(productId: `${string}-${string}`): Promise<{ market: MarketSnapshot; candles: Candle[] }> {
   if (config.coinbase.useSampleMarketData) {
     return sampleMarketInputs(productId);
@@ -313,5 +671,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   } finally {
     await persistence.close();
+    if (operatorRepo) await operatorRepo.close();
   }
 }

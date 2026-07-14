@@ -23,7 +23,7 @@ The review view must show product, side, size, order type, strategy rationale, A
 
 ## Scope
 
-Paper and sandbox flows may execute automatically because they cannot place a live order. Live market analysis and preview may also run automatically. Live order submission may not. This policy applies to strategy-generated entries, exits, and reductions; the system does not claim automatic protective exits while this policy is active.
+Paper flows may execute automatically: a paper fill is a simulation and places no exchange order. Sandbox and live flows place real orders on the Coinbase exchange (sandbox uses fake money but the real order lifecycle), so both go through the operator approval gate — the worker refuses to start in sandbox or live mode unless interactive approval is enabled, and never auto-fills outside paper. Live market analysis and preview may run automatically; sandbox and live order submission may not. This policy applies to strategy-generated entries, exits, and reductions; the system does not claim automatic protective exits while this policy is active.
 
 ## Learning authority
 

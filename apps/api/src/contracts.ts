@@ -212,7 +212,9 @@ export const ProposalStatusSchema = z.enum([
   "rejected",
   "expired",
   "executed",
-  "cancelled"
+  "cancelled",
+  "executing",
+  "execution_failed"
 ]);
 
 export const OrderPreviewSchema = z

@@ -71,6 +71,57 @@ export interface DecideProposalInput {
   now: Date;
 }
 
+/** Execution mode for a real (non-paper) fill. */
+export type ExecutionMode = "sandbox" | "live";
+
+/**
+ * A proposal atomically claimed for execution (status flipped approved ->
+ * executing). Carries the `tradeIntentId` — dropped by `StoredProposal` but
+ * required for the fill's foreign key.
+ */
+export interface ClaimedProposal {
+  id: string;
+  tradeIntentId: string | null;
+  preview: OrderPreview;
+  digest: string;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+/** A real, exchange-confirmed fill written when a proposal is marked executed. */
+export interface ExecutedFillInput {
+  fillId: string;
+  tradeIntentId: string;
+  proposalId: string;
+  productId: string;
+  side: Side;
+  quoteSizeUsd: number;
+  price: number;
+  baseSize: number;
+  feeUsd: number;
+  filledAt: Date;
+  mode: ExecutionMode;
+  exchangeOrderId: string;
+  clientOrderId: string;
+}
+
+export interface MarkProposalExecutedInput {
+  proposalId: string;
+  fill: ExecutedFillInput;
+  auditId: string;
+  correlationId: string;
+  now: Date;
+}
+
+export interface MarkProposalExecutionFailedInput {
+  proposalId: string;
+  /** Redacted reason — never a raw exchange payload. */
+  reason: string;
+  auditId: string;
+  correlationId: string;
+  now: Date;
+}
+
 export type Side = "BUY" | "SELL";
 export type ComponentStatus = "ok" | "degraded" | "down";
 
@@ -174,6 +225,16 @@ export interface OperatorRepository {
   getProposal(id: string): Promise<StoredProposal | null>;
   listProposals(limit: number, statuses?: ProposalStatus[]): Promise<StoredProposal[]>;
   decideProposal(input: DecideProposalInput): Promise<DecisionResult>;
+  /**
+   * Atomically claim the oldest approved proposal for execution (approved ->
+   * executing). Exactly-once via `FOR UPDATE SKIP LOCKED`: concurrent claimers
+   * get different rows or null. Returns null when nothing is approved.
+   */
+  claimNextApprovedProposal(now: Date): Promise<ClaimedProposal | null>;
+  /** executing -> executed, plus the real fill and audit event, in one tx. Idempotent. */
+  markProposalExecuted(input: MarkProposalExecutedInput): Promise<void>;
+  /** executing -> execution_failed (terminal) plus audit event. Idempotent. */
+  markProposalExecutionFailed(input: MarkProposalExecutionFailedInput): Promise<void>;
   upsertMemory(input: UpsertMemoryInput): Promise<LearnedMemory>;
   getProfile(): Promise<ProfileView>;
   correctMemory(input: CorrectMemoryInput): Promise<CorrectResult>;
@@ -543,6 +604,113 @@ export class PostgresOperatorRepository implements OperatorRepository {
     });
   }
 
+  async claimNextApprovedProposal(now: Date): Promise<ClaimedProposal | null> {
+    // Single-statement atomic claim. The inner SELECT ... FOR UPDATE SKIP LOCKED
+    // reserves at most one approved row; a concurrent claimer skips it and takes
+    // the next (or none). RETURNING gives us the claimed row.
+    const result = await this.executor.query(
+      `UPDATE proposals SET status = 'executing', claimed_at = $1
+         WHERE id = (
+           SELECT id FROM proposals
+            WHERE status = 'approved'
+            ORDER BY created_at ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+         )
+       RETURNING *`,
+      [now]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const proposal = rowToProposal(row);
+    return {
+      id: proposal.id,
+      tradeIntentId: (row.trade_intent_id as string | null) ?? null,
+      preview: proposal.preview,
+      digest: proposal.digest,
+      createdAt: proposal.createdAt,
+      expiresAt: proposal.expiresAt
+    };
+  }
+
+  async markProposalExecuted(input: MarkProposalExecutedInput): Promise<void> {
+    await this.executor.transaction(async (tx) => {
+      // Guard the flip on the `executing` state and RETURN it: a duplicate call
+      // (status already `executed`) matches zero rows, so we skip the fill and
+      // audit inserts — the first call already wrote them. The whole thing is
+      // one transaction, so a failed fill insert rolls the status flip back too.
+      const updated = await tx.query(
+        `UPDATE proposals
+            SET status = 'executed', executed_at = $2, exchange_order_id = $3, client_order_id = $4
+          WHERE id = $1 AND status = 'executing'
+        RETURNING id`,
+        [input.proposalId, input.now, input.fill.exchangeOrderId, input.fill.clientOrderId]
+      );
+      if (updated.rows.length === 0) return;
+
+      const f = input.fill;
+      await tx.query(
+        `INSERT INTO paper_fills
+           (id, trade_intent_id, product_id, side, quote_size_usd, price, base_size, fee_usd, filled_at,
+            mode, exchange_order_id, client_order_id, proposal_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (client_order_id) WHERE client_order_id IS NOT NULL DO NOTHING`,
+        [
+          f.fillId,
+          f.tradeIntentId,
+          f.productId,
+          f.side,
+          f.quoteSizeUsd,
+          f.price,
+          f.baseSize,
+          f.feeUsd,
+          f.filledAt,
+          f.mode,
+          f.exchangeOrderId,
+          f.clientOrderId,
+          f.proposalId
+        ]
+      );
+
+      await tx.query(
+        `INSERT INTO audit_events (id, type, actor, correlation_id, occurred_at, summary, metadata)
+         VALUES ($1, 'proposal.executed', 'worker', $2, $3, $4, $5)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          input.auditId,
+          input.correlationId,
+          input.now,
+          `executed ${f.mode} ${f.side} ${f.productId} (order ${f.exchangeOrderId})`,
+          JSON.stringify({ mode: f.mode, exchangeOrderId: f.exchangeOrderId, proposalId: f.proposalId })
+        ]
+      );
+    });
+  }
+
+  async markProposalExecutionFailed(input: MarkProposalExecutionFailedInput): Promise<void> {
+    await this.executor.transaction(async (tx) => {
+      const updated = await tx.query(
+        `UPDATE proposals SET status = 'execution_failed', executed_at = $2
+          WHERE id = $1 AND status = 'executing'
+        RETURNING id`,
+        [input.proposalId, input.now]
+      );
+      if (updated.rows.length === 0) return;
+      await tx.query(
+        `INSERT INTO audit_events (id, type, actor, correlation_id, occurred_at, summary, metadata)
+         VALUES ($1, 'proposal.execution_failed', 'worker', $2, $3, $4, $5)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          input.auditId,
+          input.correlationId,
+          input.now,
+          `execution failed for proposal ${input.proposalId}: ${input.reason}`,
+          JSON.stringify({ reason: input.reason })
+        ]
+      );
+    });
+  }
+
   async upsertMemory(input: UpsertMemoryInput): Promise<LearnedMemory> {
     assertNoSecret(input.key, input.value);
     return this.executor.transaction(async (tx) => {
@@ -658,6 +826,7 @@ export class InMemoryOperatorRepository implements OperatorRepository {
   private heartbeats = new Map<string, WorkerHeartbeat>();
   private audit: AuditEventRow[] = [];
   private proposals = new Map<string, StoredProposal>();
+  private proposalTradeIntents = new Map<string, string | null>();
   private memories = new Map<string, LearnedMemory>();
 
   /** Test seam: seed fills (the worker writes these via the audit chain). */
@@ -735,6 +904,7 @@ export class InMemoryOperatorRepository implements OperatorRepository {
       createdAt: input.createdAt,
       expiresAt: input.expiresAt
     });
+    this.proposalTradeIntents.set(input.id, input.tradeIntentId ?? null);
   }
 
   async getProposal(id: string): Promise<StoredProposal | null> {
@@ -759,6 +929,67 @@ export class InMemoryOperatorRepository implements OperatorRepository {
     }
     this.proposals.set(input.proposalId, { ...proposal, status: input.decision });
     return { ok: true, status: input.decision, decidedAt: input.now };
+  }
+
+  async claimNextApprovedProposal(now: Date): Promise<ClaimedProposal | null> {
+    const approved = [...this.proposals.values()]
+      .filter((p) => p.status === "approved")
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    const next = approved[0];
+    if (!next) return null;
+    this.proposals.set(next.id, { ...next, status: "executing" });
+    void now;
+    return {
+      id: next.id,
+      tradeIntentId: this.proposalTradeIntents.get(next.id) ?? null,
+      preview: next.preview,
+      digest: next.digest,
+      createdAt: next.createdAt,
+      expiresAt: next.expiresAt
+    };
+  }
+
+  async markProposalExecuted(input: MarkProposalExecutedInput): Promise<void> {
+    const proposal = this.proposals.get(input.proposalId);
+    if (!proposal || proposal.status !== "executing") return;
+    this.proposals.set(input.proposalId, { ...proposal, status: "executed" });
+    const f = input.fill;
+    if (!this.fills.some((existing) => existing.fillId === f.fillId)) {
+      this.fills.push({
+        fillId: f.fillId,
+        productId: f.productId,
+        side: f.side,
+        quoteSizeUsd: f.quoteSizeUsd,
+        price: f.price,
+        baseSize: f.baseSize,
+        feeUsd: f.feeUsd,
+        filledAt: f.filledAt,
+        reasonCode: null,
+        rationale: null
+      });
+    }
+    this.audit.push({
+      id: input.auditId,
+      type: "proposal.executed",
+      actor: "worker",
+      correlationId: input.correlationId,
+      occurredAt: input.now,
+      summary: `executed ${f.mode} ${f.side} ${f.productId} (order ${f.exchangeOrderId})`
+    });
+  }
+
+  async markProposalExecutionFailed(input: MarkProposalExecutionFailedInput): Promise<void> {
+    const proposal = this.proposals.get(input.proposalId);
+    if (!proposal || proposal.status !== "executing") return;
+    this.proposals.set(input.proposalId, { ...proposal, status: "execution_failed" });
+    this.audit.push({
+      id: input.auditId,
+      type: "proposal.execution_failed",
+      actor: "worker",
+      correlationId: input.correlationId,
+      occurredAt: input.now,
+      summary: `execution failed for proposal ${input.proposalId}: ${input.reason}`
+    });
   }
 
   async upsertMemory(input: UpsertMemoryInput): Promise<LearnedMemory> {

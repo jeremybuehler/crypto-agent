@@ -88,6 +88,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     }
   }
 
+  // Any non-paper mode places real exchange orders, so it must go through the
+  // operator approval gate (never auto-fill) and needs Coinbase credentials.
+  // Fail to boot on the unsafe combination rather than discovering it at trade
+  // time. Paper is unaffected.
+  if (parsed.TRADING_MODE !== "paper") {
+    const nonPaperIssues: string[] = [];
+    if (!parsed.INTERACTIVE_APPROVAL) {
+      nonPaperIssues.push("INTERACTIVE_APPROVAL=true (no auto-fill outside paper)");
+    }
+    if (!parsed.COINBASE_API_KEY_NAME) nonPaperIssues.push("COINBASE_API_KEY_NAME");
+    if (!parsed.COINBASE_API_PRIVATE_KEY) nonPaperIssues.push("COINBASE_API_PRIVATE_KEY");
+    if (nonPaperIssues.length > 0) {
+      throw new Error(
+        `Refusing to start ${parsed.TRADING_MODE} trading. Missing or unsafe settings: ${nonPaperIssues.join(", ")}`
+      );
+    }
+  }
+
   if (parsed.PERSISTENCE_ENABLED && !parsed.DATABASE_URL) {
     throw new Error("PERSISTENCE_ENABLED=true requires DATABASE_URL.");
   }
