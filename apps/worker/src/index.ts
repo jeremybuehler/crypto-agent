@@ -12,10 +12,12 @@ import {
   WebhookAlertSink,
   loadConfig,
   logger,
+  type Alert,
   type AlertSink,
   type MarketSnapshot,
   type PortfolioState,
   type ProductId,
+  type RiskDecision,
   type TradeIntent
 } from "@agent/core";
 import { PaperBroker, computeProposalDigest, previewOrder, type OrderPreview } from "@agent/execution";
@@ -53,6 +55,25 @@ const alerts = new AlertDispatcher(alertSinks, (error, alert) =>
   logger.error({ error, alertId: alert.id }, "Alert sink failed.")
 );
 
+// Latched circuit breaker. Once tripped (daily loss halt, reconciliation
+// breach) the worker refuses to generate intents or drain approvals until the
+// operator restarts the process — a deliberate manual step, mirroring the
+// live-mode kill switch that only the operator can clear.
+let circuitBreakerReason: string | null = null;
+
+export function tripCircuitBreaker(reason: string): void {
+  circuitBreakerReason = reason;
+}
+
+export function circuitBreakerTripped(): string | null {
+  return circuitBreakerReason;
+}
+
+/** Test seam: production code must never clear the breaker — restart instead. */
+export function resetCircuitBreakerForTests(): void {
+  circuitBreakerReason = null;
+}
+
 // Bounds per loop tick so a backlog or a slow exchange can't monopolize a tick.
 const MAX_EXECUTIONS_PER_TICK = 5;
 const FILL_CONFIRM_ATTEMPTS = 5;
@@ -82,6 +103,11 @@ let lastFillAt: Date | undefined;
  * failure still reports a `degraded` heartbeat before rethrowing.
  */
 export async function runOnce(portfolio: PortfolioState = initialPortfolio): Promise<PortfolioState> {
+  if (circuitBreakerReason) {
+    logger.error({ reason: circuitBreakerReason }, "Circuit breaker tripped; refusing to trade until restart.");
+    await postHeartbeat(portfolio, "degraded");
+    return portfolio;
+  }
   try {
     // Drain operator-approved proposals into real fills BEFORE generating new
     // intents, so risk/exposure downstream reflects what we just executed.
@@ -93,6 +119,52 @@ export async function runOnce(portfolio: PortfolioState = initialPortfolio): Pro
     await postHeartbeat(portfolio, "degraded");
     throw error;
   }
+}
+
+export function dailyLossRuleFailed(decision: RiskDecision): boolean {
+  return decision.ruleResults.some((result) => result.rule === "daily_loss" && !result.passed);
+}
+
+/** Id is the UTC day, so a breach pages once and repeat rejections stay quiet. */
+export function buildDailyLossHaltAlert(portfolio: PortfolioState, maxDailyLossPct: number, at: Date): Alert {
+  return {
+    id: `daily_loss_halt:${at.toISOString().slice(0, 10)}`,
+    kind: "daily_loss_halt",
+    severity: "critical",
+    summary: `Daily loss halt: daily PnL ${portfolio.dailyPnlPct.toFixed(2)}% breached the -${maxDailyLossPct}% limit. Trading halted until operator restart.`,
+    at,
+    metadata: { dailyPnlPct: portfolio.dailyPnlPct, maxDailyLossPct }
+  };
+}
+
+export function buildOrderSubmittedAlert(
+  input: {
+    proposalId: string;
+    productId: string;
+    side: "BUY" | "SELL";
+    quoteSizeUsd: number;
+    mode: "sandbox" | "live";
+    exchangeOrderId: string;
+  },
+  at: Date
+): Alert {
+  return {
+    id: `order_submitted:${input.proposalId}`,
+    kind: "order_submitted",
+    severity: input.mode === "live" ? "critical" : "warning",
+    summary: `${input.mode} order submitted: ${input.side} $${input.quoteSizeUsd} ${input.productId} (proposal ${input.proposalId}).`,
+    at,
+    metadata: { ...input }
+  };
+}
+
+/** Alert (deduped per UTC day) and trip the circuit breaker on a daily-loss breach. */
+async function haltOnDailyLoss(decision: RiskDecision, portfolio: PortfolioState): Promise<void> {
+  if (!dailyLossRuleFailed(decision)) return;
+  await alerts.dispatch(buildDailyLossHaltAlert(portfolio, config.risk.maxDailyLossPct, new Date()));
+  tripCircuitBreaker(
+    `Daily loss limit breached (daily PnL ${portfolio.dailyPnlPct.toFixed(2)}% vs -${config.risk.maxDailyLossPct}% max).`
+  );
 }
 
 async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState> {
@@ -147,6 +219,7 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
   await persistence.saveRiskDecision(decision);
   if (!decision.approved) {
     logger.warn({ intent, decision }, "Trade intent rejected by risk engine.");
+    await haltOnDailyLoss(decision, portfolio);
     return portfolio;
   }
 
@@ -326,6 +399,8 @@ async function executeApprovedProposals(portfolio: PortfolioState): Promise<Port
     });
     if (!decision.approved) {
       await failExecution(claimed.id, `Risk rejected at execution: ${decision.reasons.join("; ")}`);
+      await haltOnDailyLoss(decision, current);
+      if (circuitBreakerReason) break;
       continue;
     }
     void market;
@@ -349,6 +424,23 @@ async function executeApprovedProposals(portfolio: PortfolioState): Promise<Port
       logger.error({ proposalId: claimed.id, error }, "Order placement in doubt; proposal left executing.");
       break;
     }
+
+    // Page immediately on submission (PRD M8: alert < 10s), before fill
+    // confirmation — the operator should hear about a placed order even if
+    // confirmation stalls.
+    await alerts.dispatch(
+      buildOrderSubmittedAlert(
+        {
+          proposalId: claimed.id,
+          productId: claimed.preview.productId,
+          side: claimed.preview.side,
+          quoteSizeUsd: claimed.preview.quoteSizeUsd,
+          mode: config.tradingMode === "live" ? "live" : "sandbox",
+          exchangeOrderId: orderId
+        },
+        new Date()
+      )
+    );
 
     // Live confirms from the exchange's own fills (never fabricated). The Coinbase
     // sandbox returns a static, canned fills list that ignores the order_id filter
@@ -388,8 +480,12 @@ async function executeApprovedProposals(portfolio: PortfolioState): Promise<Port
     current = applyFillToPortfolio(current, fill);
     logger.info({ proposalId: claimed.id, orderId, fill }, `${config.tradingMode} order executed.`);
 
-    // Read-only cross-check against the exchange; halt the loop on divergence.
-    if (await reconciliationBreached()) break;
+    // Read-only cross-check against the exchange; a divergence trips the
+    // circuit breaker so the halt survives past this tick (until restart).
+    if (await reconciliationBreached()) {
+      tripCircuitBreaker("Reconciliation breach: untracked open order(s) on the exchange.");
+      break;
+    }
   }
 
   return current;

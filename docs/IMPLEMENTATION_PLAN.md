@@ -311,9 +311,9 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [crypto-
 - **Files to touch:** `packages/core/src/alerts.ts`, transport adapter (start with stdout + webhook), wiring
 - **Scope:** Implement the alert conditions in [TECH_SPEC.md §12]. Transport pluggable; ship a webhook adapter and a stdout adapter.
 - **Acceptance:**
-  - [ ] Every live order produces an alert in < 10s ([PRD §M8])
-  - [ ] Kill switch activation produces an alert immediately
-  - [ ] Daily loss halt produces an alert and a circuit breaker trigger
+  - [x] Every live order produces an alert in < 10s ([PRD §M8]) — dispatched synchronously on submission, before fill confirmation
+  - [x] Kill switch activation produces an alert immediately
+  - [x] Daily loss halt produces an alert and a circuit breaker trigger (latched until operator restart)
 
 ### T5.3 — Live trading dry-run gate
 - **Depends on:** T5.1, T5.2, T4.2

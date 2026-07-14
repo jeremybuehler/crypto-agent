@@ -79,6 +79,8 @@ export interface ServerDeps {
   opsState?: OpsState;
   /** Inject an operator repository (e.g. pglite-backed) to avoid Postgres. */
   operatorRepo?: OperatorRepository;
+  /** Inject alert sinks (e.g. a capturing sink) to observe alerts in tests. */
+  alertSinks?: AlertSink[];
 }
 
 export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
@@ -130,8 +132,10 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
   // Operational alerts: always to stdout; optionally to an authenticated webhook
   // (ALERT_WEBHOOK_URL/ALERT_WEBHOOK_TOKEN). The dispatcher dedupes by alert id
   // and isolates sink failures so one broken sink can't silence the others.
-  const alertSinks: AlertSink[] = [new StdoutAlertSink((line) => app.log.warn({ alert: line }, "alert"))];
-  if (process.env.ALERT_WEBHOOK_URL) {
+  const alertSinks: AlertSink[] = deps.alertSinks ?? [
+    new StdoutAlertSink((line) => app.log.warn({ alert: line }, "alert"))
+  ];
+  if (!deps.alertSinks && process.env.ALERT_WEBHOOK_URL) {
     alertSinks.push(
       new WebhookAlertSink({
         url: process.env.ALERT_WEBHOOK_URL,
