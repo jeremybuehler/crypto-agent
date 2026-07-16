@@ -183,9 +183,13 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
   await persistence.saveMarketSnapshot(market);
 
   const features = computeFeatures(candles, market);
-  const aiProvider: AIContextProvider = config.anthropicApiKey
-    ? new ClaudeAIContextProvider(config.anthropicApiKey)
-    : new ConservativeStubAIContextProvider();
+  // The stub is the default: no per-loop LLM spend. The worker only calls Claude
+  // for market context when explicitly enabled (WORKER_LLM_MARKET_CONTEXT), so
+  // an ANTHROPIC_API_KEY set for the assistant doesn't silently bill every tick.
+  const aiProvider: AIContextProvider =
+    config.anthropicApiKey && config.workerLlmMarketContext
+      ? new ClaudeAIContextProvider(config.anthropicApiKey)
+      : new ConservativeStubAIContextProvider();
   const aiContextInput = {
     productId: market.productId,
     timeframe: "1m",

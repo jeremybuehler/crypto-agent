@@ -53,6 +53,11 @@ const envSchema = z.object({
   COINBASE_REST_BASE_URL: z.string().url().default("https://api.coinbase.com/api/v3/brokerage"),
   COINBASE_SANDBOX_REST_BASE_URL: z.string().url().default("https://api-sandbox.coinbase.com/api/v3/brokerage"),
   USE_SAMPLE_MARKET_DATA: booleanFromEnv.default("false"),
+  // The worker calls the LLM once per loop tick for market context — real API
+  // spend on a continuous loop. Off by default: the worker uses the deterministic
+  // stub, while the API's educational assistant still uses the key. Turn on only
+  // when you want LLM market context in the trading loop.
+  WORKER_LLM_MARKET_CONTEXT: booleanFromEnv.default("false"),
   // Which strategy the worker runs. Names must match the strategy registry in
   // @agent/strategy (kept as a literal here to avoid a package cycle).
   STRATEGY: z.enum(["trend", "mean-reversion", "breakout"]).default("trend"),
@@ -154,6 +159,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       requireOrderPreview: parsed.REQUIRE_ORDER_PREVIEW
     },
     anthropicApiKey: parsed.ANTHROPIC_API_KEY,
+    workerLlmMarketContext: parsed.WORKER_LLM_MARKET_CONTEXT,
     redisUrl: parsed.REDIS_URL,
     coinbase: {
       apiKeyName: parsed.COINBASE_API_KEY_NAME,
