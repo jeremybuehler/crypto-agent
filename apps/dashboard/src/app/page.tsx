@@ -22,7 +22,11 @@ export default function Dashboard() {
   const { data: proposalList, mutate: mutateProposals } = useSWR<ProposalList>("/api/proposals", fetcher, {
     refreshInterval: POLL
   });
-  const { data: candleData } = useSWR<CandlesResponse>("/api/candles?bucket=20&limit=60", fetcher, {
+  // 60s buckets: the worker writes a snapshot every ~20s (a real Claude
+  // market-context call per loop tick dominates the interval), so a bucket must
+  // span several snapshots to form a candle with a real body instead of a flat
+  // single-point dash.
+  const { data: candleData } = useSWR<CandlesResponse>("/api/candles?bucket=60&limit=60", fetcher, {
     refreshInterval: POLL
   });
 
@@ -57,7 +61,7 @@ export default function Dashboard() {
           candles={candleData?.candles ?? []}
           trades={trades}
           productId={candleData?.productId ?? "BTC-USD"}
-          bucketSeconds={candleData?.bucketSeconds ?? 20}
+          bucketSeconds={candleData?.bucketSeconds ?? 60}
         />
 
         {/* Pending approvals */}

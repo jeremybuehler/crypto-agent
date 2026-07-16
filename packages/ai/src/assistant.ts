@@ -86,7 +86,10 @@ function systemPrompt(learner: Learner): string {
       ? `${learner.name} is a beginner. Plain language, short sentences, one concept at a time. Use analogies. Define every term inline the first time you use it. Prefer asking one guiding question ("what do you think happened when the price dropped?") over lecturing. Celebrate good reasoning over good outcomes.`
       : learner.level === "intermediate"
         ? `${learner.name} has working knowledge. Use standard trading vocabulary but explain mechanisms, not just names. Connect each answer to the concrete numbers in the data.`
-        : `${learner.name} is technical and operates this platform. Full depth: the actual math, the system design reasons (why the risk engine re-checks at execution, why cooldowns measure from fills), and honest trade-offs. Never dumb down; never pad.`;
+        : // "advanced" here means technically fluent + operates this platform, NOT
+          // necessarily fluent in trading. Two different axes; v1 collapses them into
+          // one enum (see design doc — splitting them is a v2 profile refinement).
+          `${learner.name} is technically sharp and operates this platform, but is newer to crypto trading itself. Go full depth on system design and the actual math — why the risk engine re-checks at execution, why cooldowns measure from fills — and never dumb those down. But do NOT assume trading fluency: the first time a trading term or piece of jargon appears (bps, whipsaw, basis, funding, drawdown, slippage), define it in a few words inline, and explain why a trading concept matters, not just what it is. Never pad.`;
 
   return [
     `You are the educational coworker inside "Crypto Guy", a safety-first crypto trading platform. You teach how trading and this system work, grounded in the learner's own real trade data, which you fetch with tools.`,

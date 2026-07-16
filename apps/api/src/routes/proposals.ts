@@ -91,9 +91,15 @@ export function registerProposalRoutes(app: FastifyInstance, deps: ProposalRoute
     return InternalProposalResponseSchema.parse({ id, digest, status: "pending", expiresAt: expiresAt.toISOString() });
   });
 
+  // The operator can only act on pending proposals that haven't expired. Nothing
+  // sweeps expired proposals out of `pending`, so filter them here and cap the
+  // list — otherwise the queue fills with dozens of un-actionable, expired rows.
+  const MAX_ACTIONABLE_PROPOSALS = 8;
   app.get("/proposals", { preHandler: deps.requireOperator }, async () => {
+    const now = deps.now?.() ?? new Date();
     const proposals = await deps.repo.listProposals(50, ["pending"]);
-    return ProposalListResponseSchema.parse({ proposals: proposals.map(toProposalResponse) });
+    const actionable = proposals.filter((p) => p.expiresAt > now).slice(0, MAX_ACTIONABLE_PROPOSALS);
+    return ProposalListResponseSchema.parse({ proposals: actionable.map(toProposalResponse) });
   });
 
   app.get("/proposals/:id", { preHandler: deps.requireOperator }, async (request) => {

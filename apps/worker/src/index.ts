@@ -718,19 +718,22 @@ const SAMPLE_CANDLES = 60;
 const SAMPLE_PERIOD = 20; // candles per oscillation cycle
 
 function sampleMarketInputs(productId: `${string}-${string}`): { market: MarketSnapshot; candles: Candle[] } {
-  // A smooth, index-based sine oscillation gives the real strategies enough
-  // history (>=26 bars) with genuine uptrends, reversals, and range breaks. The
-  // window drifts one bar per minute so a continuous loop keeps moving.
-  const offset = Math.floor(Date.now() / 60_000);
+  // A smooth sine oscillation gives the real strategies enough history (>=26
+  // bars) with genuine uptrends, reversals, and range breaks. The phase drifts
+  // continuously with wall-clock time (NOT floored per minute) so the live price
+  // moves on every tick — otherwise consecutive ticks in the same minute are
+  // identical and the dashboard chart renders every candle as a flat dash.
+  const nowMs = Date.now();
+  const phase = nowMs / 60_000;
   const closes = Array.from({ length: SAMPLE_CANDLES }, (_, i) =>
-    100 * (1 + 0.05 * Math.sin(((offset + i) * 2 * Math.PI) / SAMPLE_PERIOD))
+    100 * (1 + 0.05 * Math.sin(((phase + i) * 2 * Math.PI) / SAMPLE_PERIOD))
   );
 
   const candles: Candle[] = closes.map((close, i) => {
     const open = i === 0 ? close : closes[i - 1]!;
     return {
       productId,
-      start: new Date(Date.now() - (SAMPLE_CANDLES - i) * 60_000),
+      start: new Date(nowMs - (SAMPLE_CANDLES - i) * 60_000),
       open,
       high: Math.max(open, close) * 1.002,
       low: Math.min(open, close) * 0.998,
@@ -739,7 +742,12 @@ function sampleMarketInputs(productId: `${string}-${string}`): { market: MarketS
     };
   });
 
-  const price = closes[closes.length - 1]!;
+  // Live price = current trend value plus a small fast wiggle. The wiggle's 13s
+  // period doesn't align with the loop interval, so every snapshot within a
+  // ~20s chart bucket differs — giving each candle a real body and wicks instead
+  // of a flat line. Amplitude (~0.4%) stays well under the 5% trend swing.
+  const trend = closes[closes.length - 1]!;
+  const price = trend * (1 + 0.004 * Math.sin((nowMs / 13_000) * 2 * Math.PI));
   const market: MarketSnapshot = {
     productId,
     price,
