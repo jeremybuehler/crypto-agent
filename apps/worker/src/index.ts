@@ -796,3 +796,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (operatorRepo) await operatorRepo.close();
   }
 }
+
+// Railway Nixpacks deploy trigger — see DEPLOY.md

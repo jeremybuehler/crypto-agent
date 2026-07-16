@@ -182,3 +182,5 @@ export async function postJson(path: string, body: unknown) {
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }
+
+// Railway Nixpacks deploy trigger — see DEPLOY.md

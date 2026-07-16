@@ -9,3 +9,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 export { app };
+
+// Railway Nixpacks deploy trigger — see DEPLOY.md
