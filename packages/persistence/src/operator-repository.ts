@@ -269,6 +269,8 @@ export interface OperatorRepository {
   listRecentFills(limit: number): Promise<FillRow[]>;
   getCandles(productId: string, bucketSeconds: number, limit: number): Promise<PriceCandle[]>;
   getMetrics(): Promise<RealizedMetrics & { equityUsd: number | null }>;
+  /** Equity over time (oldest→newest) from portfolio snapshots, for the equity curve. */
+  getEquitySeries(limit: number): Promise<Array<{ time: number; equityUsd: number }>>;
   getWorkerHeartbeat(workerId: string): Promise<WorkerHeartbeat | null>;
   recordAuditEvent(event: AuditEventInput): Promise<void>;
   listAuditEvents(limit: number): Promise<AuditEventRow[]>;
@@ -368,6 +370,71 @@ export function computeRealizedMetrics(fills: FillRow[]): RealizedMetrics {
     totalFees,
     realizedPnl: grossRealized - totalFees
   };
+}
+
+export interface TradeStats {
+  wins: number;
+  losses: number;
+  winRate: number;
+  avgWin: number;
+  avgLoss: number;
+  bestTrade: number;
+  worstTrade: number;
+  realizedPnl: number;
+  totalFees: number;
+}
+
+/**
+ * Richer performance stats from fills (chronological order): per-closing-trade
+ * realized PnL feeds win rate, average win/loss, and best/worst. Same
+ * average-cost basis as computeRealizedMetrics; realized values are gross, and
+ * realizedPnl nets out total fees to match.
+ */
+export function computeTradeStats(fills: FillRow[]): TradeStats {
+  const books = new Map<string, { baseQty: number; avgCost: number }>();
+  const realized: number[] = [];
+  let totalFees = 0;
+
+  for (const fill of fills) {
+    totalFees += fill.feeUsd;
+    const book = books.get(fill.productId) ?? { baseQty: 0, avgCost: 0 };
+    if (fill.side === "BUY") {
+      const newQty = book.baseQty + fill.baseSize;
+      book.avgCost = newQty === 0 ? 0 : (book.avgCost * book.baseQty + fill.price * fill.baseSize) / newQty;
+      book.baseQty = newQty;
+    } else {
+      const closedQty = Math.min(fill.baseSize, book.baseQty);
+      realized.push((fill.price - book.avgCost) * closedQty);
+      book.baseQty = Math.max(0, book.baseQty - fill.baseSize);
+    }
+    books.set(fill.productId, book);
+  }
+
+  const wins = realized.filter((r) => r > 0);
+  const losses = realized.filter((r) => r <= 0);
+  const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
+  return {
+    wins: wins.length,
+    losses: losses.length,
+    winRate: realized.length ? wins.length / realized.length : 0,
+    avgWin: mean(wins),
+    avgLoss: mean(losses),
+    bestTrade: realized.length ? Math.max(...realized) : 0,
+    worstTrade: realized.length ? Math.min(...realized) : 0,
+    realizedPnl: realized.reduce((s, x) => s + x, 0) - totalFees,
+    totalFees
+  };
+}
+
+/** Largest peak-to-trough drop in an equity series, as a percentage. */
+export function maxDrawdownPct(equity: number[]): number {
+  let peak = -Infinity;
+  let maxDd = 0;
+  for (const v of equity) {
+    peak = Math.max(peak, v);
+    if (peak > 0) maxDd = Math.max(maxDd, (peak - v) / peak);
+  }
+  return maxDd * 100;
 }
 
 // ---------------------------------------------------------------------------
@@ -495,6 +562,17 @@ export class PostgresOperatorRepository implements OperatorRepository {
     const metrics = computeRealizedMetrics(result.rows.map(rowToFill));
     const portfolio = await this.getLatestPortfolio();
     return { ...metrics, equityUsd: portfolio?.equityUsd ?? null };
+  }
+
+  async getEquitySeries(limit: number): Promise<Array<{ time: number; equityUsd: number }>> {
+    // Take the newest `limit` snapshots, then return them oldest→newest.
+    const result = await this.executor.query(
+      "SELECT equity_usd, observed_at FROM portfolio_snapshots ORDER BY observed_at DESC LIMIT $1",
+      [limit]
+    );
+    return result.rows
+      .map((row) => ({ time: date(row.observed_at).getTime(), equityUsd: num(row.equity_usd) }))
+      .reverse();
   }
 
   async getWorkerHeartbeat(workerId: string): Promise<WorkerHeartbeat | null> {
@@ -1068,6 +1146,13 @@ export class InMemoryOperatorRepository implements OperatorRepository {
     const ordered = [...this.fills].sort((a, b) => a.filledAt.getTime() - b.filledAt.getTime());
     const portfolio = await this.getLatestPortfolio();
     return { ...computeRealizedMetrics(ordered), equityUsd: portfolio?.equityUsd ?? null };
+  }
+
+  async getEquitySeries(limit: number): Promise<Array<{ time: number; equityUsd: number }>> {
+    return [...this.snapshots]
+      .sort((a, b) => a.observedAt.getTime() - b.observedAt.getTime())
+      .slice(-limit)
+      .map((s) => ({ time: s.observedAt.getTime(), equityUsd: s.portfolio.equityUsd }));
   }
 
   async getWorkerHeartbeat(workerId: string): Promise<WorkerHeartbeat | null> {

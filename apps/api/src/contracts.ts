@@ -365,6 +365,39 @@ export const CandlesResponseSchema = z
   })
   .strict();
 
+// Watchlist ticker: last price, period change, and a tiny sparkline series.
+export const TickerSchema = z
+  .object({
+    productId: ProductIdSchema,
+    price: z.number(),
+    changePct: z.number(),
+    spark: z.array(z.number()).max(200)
+  })
+  .strict();
+
+export const TickersResponseSchema = z.object({ tickers: z.array(TickerSchema).max(50) }).strict();
+
+// Performance: equity curve + realized-trade stats for the analytics panels.
+export const PerformanceResponseSchema = z
+  .object({
+    equity: z.array(z.object({ time: z.number().int().nonnegative(), equityUsd: z.number() }).strict()).max(1000),
+    stats: z
+      .object({
+        wins: z.number().int().nonnegative(),
+        losses: z.number().int().nonnegative(),
+        winRate: z.number(),
+        avgWin: z.number(),
+        avgLoss: z.number(),
+        bestTrade: z.number(),
+        worstTrade: z.number(),
+        realizedPnl: z.number(),
+        totalFees: z.number(),
+        maxDrawdownPct: z.number()
+      })
+      .strict()
+  })
+  .strict();
+
 export const MetricsResponseSchema = z
   .object({
     totalTrades: z.number().int().nonnegative(),

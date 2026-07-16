@@ -103,6 +103,33 @@ export interface CandlesResponse {
 export const TIMEFRAMES = ["1m", "5m", "15m", "1h"] as const;
 export type Timeframe = (typeof TIMEFRAMES)[number];
 
+export interface Ticker {
+  productId: string;
+  price: number;
+  changePct: number;
+  spark: number[];
+}
+
+export interface TickersResponse {
+  tickers: Ticker[];
+}
+
+export interface Performance {
+  equity: Array<{ time: number; equityUsd: number }>;
+  stats: {
+    wins: number;
+    losses: number;
+    winRate: number;
+    avgWin: number;
+    avgLoss: number;
+    bestTrade: number;
+    worstTrade: number;
+    realizedPnl: number;
+    totalFees: number;
+    maxDrawdownPct: number;
+  };
+}
+
 export interface OrderPreview {
   productId: string;
   side: "BUY" | "SELL";

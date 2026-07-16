@@ -2,6 +2,8 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import fc from "fast-check";
 import {
   computeRealizedMetrics,
+  computeTradeStats,
+  maxDrawdownPct,
   PostgresOperatorRepository,
   type FillRow
 } from "@agent/persistence";
@@ -290,5 +292,39 @@ describe("PostgresOperatorRepository (pglite-backed)", () => {
 
     const snaps = (await db.query("SELECT count(*)::int AS c FROM portfolio_snapshots")).rows[0].c;
     expect(snaps).toBe(0);
+  });
+});
+
+describe("computeTradeStats", () => {
+  it("splits realized trades into win rate, avg win/loss, and best/worst", () => {
+    const s = computeTradeStats([
+      fill({ side: "BUY", price: 100, baseSize: 1, feeUsd: 0.1 }),
+      fill({ side: "SELL", price: 110, baseSize: 1, feeUsd: 0.1 }), // +10 win
+      fill({ side: "BUY", price: 100, baseSize: 1, feeUsd: 0.1 }),
+      fill({ side: "SELL", price: 96, baseSize: 1, feeUsd: 0.1 }) // -4 loss
+    ]);
+    expect(s.wins).toBe(1);
+    expect(s.losses).toBe(1);
+    expect(s.winRate).toBeCloseTo(0.5, 8);
+    expect(s.avgWin).toBeCloseTo(10, 8);
+    expect(s.avgLoss).toBeCloseTo(-4, 8);
+    expect(s.bestTrade).toBeCloseTo(10, 8);
+    expect(s.worstTrade).toBeCloseTo(-4, 8);
+    expect(s.realizedPnl).toBeCloseTo(10 - 4 - 0.4, 8); // gross minus all fees
+  });
+
+  it("is all-zero with no closing trades", () => {
+    const s = computeTradeStats([fill({ side: "BUY", price: 100, baseSize: 1, feeUsd: 0.1 })]);
+    expect(s.wins).toBe(0);
+    expect(s.losses).toBe(0);
+    expect(s.winRate).toBe(0);
+  });
+});
+
+describe("maxDrawdownPct", () => {
+  it("finds the largest peak-to-trough drop as a percent", () => {
+    expect(maxDrawdownPct([100, 120, 90, 130])).toBeCloseTo(25, 8); // 120 → 90
+    expect(maxDrawdownPct([100, 101, 102])).toBeCloseTo(0, 8);
+    expect(maxDrawdownPct([])).toBe(0);
   });
 });

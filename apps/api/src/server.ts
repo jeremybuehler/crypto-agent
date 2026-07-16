@@ -23,7 +23,9 @@ import {
 import { createOpsState, type OpsState } from "@agent/risk";
 import { AssistantAskSchema, createAssistantForApi } from "./assistant.js";
 import {
+  computeTradeStats,
   createOperatorRepositoryForConfig,
+  maxDrawdownPct,
   type FillRow,
   type OperatorRepository,
   type PriceCandle
@@ -43,7 +45,9 @@ import {
   CandlesResponseSchema,
   HeartbeatIngestSchema,
   MetricsResponseSchema,
+  PerformanceResponseSchema,
   PortfolioResponseSchema,
+  TickersResponseSchema,
   TradeListResponseSchema,
   type PortfolioResponse
 } from "./contracts.js";
@@ -286,6 +290,42 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
       bucketSeconds: tf.seconds,
       candles,
       indicators: computeIndicatorSeries(candles.map((c) => c.close))
+    });
+  });
+
+  // Watchlist: real last price + ~24h change + sparkline per configured product.
+  // Read-only; independent of what the bot trades. Empty in sample mode (no
+  // multi-product real data). Per-product failures are dropped, not fatal.
+  app.get("/tickers", { preHandler: requireOp }, async () => {
+    if (!marketData) return { tickers: [] };
+    const tickers = await Promise.all(
+      config.watchlistProducts.map(async (productId) => {
+        try {
+          const candles = await liveCandles(productId, "ONE_HOUR", 24);
+          if (candles.length < 2) return null;
+          const price = candles.at(-1)!.close;
+          const first = candles[0]!.open;
+          return {
+            productId,
+            price,
+            changePct: first !== 0 ? ((price - first) / first) * 100 : 0,
+            spark: candles.map((c) => c.close)
+          };
+        } catch {
+          return null;
+        }
+      })
+    );
+    return TickersResponseSchema.parse({ tickers: tickers.filter((t): t is NonNullable<typeof t> => t != null) });
+  });
+
+  // Equity curve + realized-trade stats for the performance panels.
+  app.get("/performance", { preHandler: requireOp }, async () => {
+    const [fills, equity] = await Promise.all([repo!.listRecentFills(500), repo!.getEquitySeries(300)]);
+    const stats = computeTradeStats([...fills].reverse()); // listRecentFills is newest-first
+    return PerformanceResponseSchema.parse({
+      equity,
+      stats: { ...stats, maxDrawdownPct: maxDrawdownPct(equity.map((e) => e.equityUsd)) }
     });
   });
 

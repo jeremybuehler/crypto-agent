@@ -10,6 +10,8 @@ import CandleChart from "../components/CandleChart";
 import TradeFeed from "../components/TradeFeed";
 import RiskConfig from "../components/RiskConfig";
 import AssistantPane, { type ExplainContext } from "../components/AssistantPane";
+import Watchlist from "../components/Watchlist";
+import PerformancePanel from "../components/PerformancePanel";
 import { useState, useEffect, useCallback } from "react";
 
 const POLL = 3000;
@@ -23,11 +25,14 @@ export default function Dashboard() {
     refreshInterval: POLL
   });
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
+  const [product, setProduct] = useState("BTC-USD");
   // limit=90 keeps EMA-26/MACD/RSI warmed with room to spare, and gives the
   // cockpit a real trading-chart amount of history to read.
-  const { data: candleData } = useSWR<CandlesResponse>(`/api/candles?tf=${timeframe}&limit=90`, fetcher, {
-    refreshInterval: POLL
-  });
+  const { data: candleData } = useSWR<CandlesResponse>(
+    `/api/candles?product=${product}&tf=${timeframe}&limit=90`,
+    fetcher,
+    { refreshInterval: POLL }
+  );
 
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   useEffect(() => { if (status) setLastUpdated(new Date()); }, [status]);
@@ -55,15 +60,23 @@ export default function Dashboard() {
           <OpsPanel status={status} onMutate={() => mutateStatus()} />
         </div>
 
-        {/* Trader cockpit: candles + EMA overlays + volume + MACD + RSI */}
-        <CandleChart
-          candles={candleData?.candles ?? []}
-          indicators={candleData?.indicators}
-          trades={trades}
-          productId={candleData?.productId ?? "BTC-USD"}
-          timeframe={timeframe}
-          onTimeframe={setTimeframe}
-        />
+        {/* Trader cockpit: chart + watchlist sidebar */}
+        <div className="flex flex-col lg:flex-row gap-3">
+          <div className="flex-1 min-w-0">
+            <CandleChart
+              candles={candleData?.candles ?? []}
+              indicators={candleData?.indicators}
+              trades={trades}
+              productId={candleData?.productId ?? product}
+              timeframe={timeframe}
+              onTimeframe={setTimeframe}
+            />
+          </div>
+          <Watchlist selected={product} onSelect={setProduct} />
+        </div>
+
+        {/* Equity curve + performance stats */}
+        <PerformancePanel />
 
         {/* Pending approvals */}
         <ProposalsPanel proposals={proposalList?.proposals ?? []} onDecision={() => mutateProposals()} onExplain={explain} />

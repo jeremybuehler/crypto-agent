@@ -31,6 +31,10 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default("info"),
   TRADING_MODE: TradingModeSchema.default("paper"),
   ENABLED_PRODUCTS: z.string().default("BTC-USD,ETH-USD"),
+  // Read-only watchlist for the dashboard (real prices). Independent of
+  // ENABLED_PRODUCTS — the bot only trades ENABLED_PRODUCTS; the watchlist is
+  // just markets to watch and load in the chart.
+  WATCHLIST_PRODUCTS: z.string().default("BTC-USD,ETH-USD,SOL-USD,XRP-USD,DOGE-USD,LINK-USD"),
   BASE_CURRENCY: z.string().default("USD"),
   MAX_TRADE_NOTIONAL_USD: numberFromEnv.default("25"),
   MAX_PRODUCT_EXPOSURE_PCT: numberFromEnv.default("10"),
@@ -81,6 +85,7 @@ export type AgentConfig = ReturnType<typeof loadConfig>;
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = envSchema.parse(env);
   const enabledProducts = parsed.ENABLED_PRODUCTS.split(",").map((product) => product.trim()).filter(Boolean);
+  const watchlistProducts = parsed.WATCHLIST_PRODUCTS.split(",").map((product) => product.trim()).filter(Boolean);
 
   if (parsed.TRADING_MODE === "live") {
     const missing: string[] = [];
@@ -147,6 +152,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     logLevel: parsed.LOG_LEVEL,
     tradingMode: parsed.TRADING_MODE,
     enabledProducts,
+    watchlistProducts,
     baseCurrency: parsed.BASE_CURRENCY,
     risk: {
       maxTradeNotionalUsd: parsed.MAX_TRADE_NOTIONAL_USD,
