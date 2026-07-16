@@ -92,10 +92,20 @@ const initialPortfolio: PortfolioState = {
   positions: []
 };
 
-// Last fill time, tracked across loop iterations so the risk engine can enforce
-// MIN_SECONDS_BETWEEN_TRADES. The loop interval is only the sampling cadence;
-// trade spacing is governed here.
+// Trade spacing (MIN_SECONDS_BETWEEN_TRADES) is governed here; the loop
+// interval is only the sampling cadence. Two separate clocks on purpose:
+// lastFillAt is real executions only and feeds the risk cooldown, while
+// lastProposalAt reserves the proposal slot so identical proposals aren't
+// re-posted every tick. Intent generation spaces against BOTH; the
+// execution-time re-check spaces against fills only — otherwise a proposal
+// could never be approved inside the cooldown window it started itself.
 let lastFillAt: Date | undefined;
+let lastProposalAt: Date | undefined;
+
+function latestTradeMarker(): Date | undefined {
+  if (lastFillAt && lastProposalAt) return lastFillAt > lastProposalAt ? lastFillAt : lastProposalAt;
+  return lastFillAt ?? lastProposalAt;
+}
 
 /**
  * Run one trading loop, then report a heartbeat with the resulting portfolio.
@@ -209,12 +219,13 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
   }
   await persistence.saveTradeIntent(intent);
 
+  const spacingMarker = latestTradeMarker();
   const decision = evaluateRisk({
     config,
     intent,
     portfolio,
     killSwitchEnabled: false,
-    ...(lastFillAt ? { lastTradeAt: lastFillAt } : {})
+    ...(spacingMarker ? { lastTradeAt: spacingMarker } : {})
   });
   await persistence.saveRiskDecision(decision);
   if (!decision.approved) {
@@ -239,8 +250,11 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
   }
 
   await postProposal(intent, market);
-  // Reserve the trade slot so we don't spam identical proposals every loop.
-  lastFillAt = new Date();
+  // Reserve the proposal slot so we don't spam identical proposals every loop.
+  // Deliberately NOT lastFillAt: the execution-time risk re-check must measure
+  // the cooldown from real fills, or an approved proposal could never execute
+  // inside the cooldown window that posting it started.
+  lastProposalAt = new Date();
   return portfolio;
 }
 
