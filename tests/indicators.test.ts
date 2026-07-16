@@ -6,7 +6,10 @@ import {
   macd,
   bollingerBands,
   atr,
-  donchianChannel
+  donchianChannel,
+  emaLine,
+  macdHistogramLine,
+  rsiLine
 } from "@agent/market-data";
 import type { Candle } from "@agent/market-data";
 
@@ -100,5 +103,38 @@ describe("donchianChannel", () => {
     const d = donchianChannel(candles, 5);
     expect(d.upper).toBeCloseTo(111, 6); // 110 + 1
     expect(d.lower).toBeCloseTo(89, 6); // 90 - 1
+  });
+});
+
+describe("indicator series (aligned to input length)", () => {
+  // A varied but deterministic series long enough to exercise EMA-26 + MACD + RSI.
+  const closes = Array.from({ length: 80 }, (_, i) => 100 + 10 * Math.sin(i / 4) + (i % 3));
+
+  it("emaLine matches scalar ema at the last bar and nulls the warmup", () => {
+    const line = emaLine(closes, 12);
+    expect(line).toHaveLength(closes.length);
+    expect(line.slice(0, 11).every((v) => v === null)).toBe(true);
+    expect(line[11]).not.toBeNull();
+    expect(line.at(-1)!).toBeCloseTo(ema(closes, 12), 8);
+  });
+
+  it("macdHistogramLine matches scalar macd histogram at the last bar", () => {
+    const line = macdHistogramLine(closes);
+    expect(line).toHaveLength(closes.length);
+    expect(line.at(-1)!).toBeCloseTo(macd(closes).histogram, 8);
+    // Warmup (before the slow EMA seed) is null.
+    expect(line[0]).toBeNull();
+  });
+
+  it("rsiLine matches scalar rsi at the last bar and stays within 0..100", () => {
+    const line = rsiLine(closes, 14);
+    expect(line).toHaveLength(closes.length);
+    expect(line.at(-1)!).toBeCloseTo(rsi(closes, 14), 8);
+    for (const v of line) if (v !== null) expect(v).toBeGreaterThanOrEqual(0), expect(v).toBeLessThanOrEqual(100);
+  });
+
+  it("returns all-null when there is not enough history", () => {
+    expect(emaLine([1, 2, 3], 12).every((v) => v === null)).toBe(true);
+    expect(rsiLine([1, 2, 3], 14).every((v) => v === null)).toBe(true);
   });
 });

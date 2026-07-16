@@ -28,7 +28,8 @@ import {
   type OperatorRepository,
   type PriceCandle
 } from "@agent/persistence";
-import { CoinbasePublicMarketData } from "@agent/coinbase";
+import { CoinbasePublicMarketData, type CoinbaseGranularity } from "@agent/coinbase";
+import { emaLine, macdHistogramLine, rsiLine } from "@agent/market-data";
 import { requireInternal, requireOperator } from "./auth.js";
 import { registerSecurity } from "./plugins/security.js";
 import { registerReadiness } from "./routes/health.js";
@@ -59,6 +60,28 @@ const EMPTY_PORTFOLIO: PortfolioResponse = {
 };
 
 const RECENT_LIMIT = 50;
+
+/** A candle as served to the dashboard: OHLC + time + (live-only) volume. */
+type ApiCandle = PriceCandle & { volume: number | null };
+
+/** Chart timeframes → Coinbase granularity (live) and bucket size (sample). */
+const TIMEFRAMES: Record<string, { granularity: CoinbaseGranularity; seconds: number }> = {
+  "1m": { granularity: "ONE_MINUTE", seconds: 60 },
+  "5m": { granularity: "FIVE_MINUTE", seconds: 300 },
+  "15m": { granularity: "FIFTEEN_MINUTE", seconds: 900 },
+  "1h": { granularity: "ONE_HOUR", seconds: 3600 }
+};
+
+// EMA-12/26, MACD histogram (12/26/9), and RSI-14 — the exact indicators the
+// trend strategy trades on (packages/strategy), as series aligned to the candles.
+function computeIndicatorSeries(closes: number[]) {
+  return {
+    emaFast: emaLine(closes, 12),
+    emaSlow: emaLine(closes, 26),
+    macdHistogram: macdHistogramLine(closes),
+    rsi: rsiLine(closes, 14)
+  };
+}
 
 function toFillResponse(fill: FillRow) {
   return {
@@ -115,15 +138,23 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
   // Live market-data source for the price chart (public, no auth). Only created
   // when not in sample mode. Candles are cached briefly to bound external calls.
   const marketData = config.coinbase.useSampleMarketData ? null : new CoinbasePublicMarketData(config.coinbase);
-  const candleCache = new Map<string, { at: number; candles: PriceCandle[] }>();
+  const candleCache = new Map<string, { at: number; candles: ApiCandle[] }>();
   const CANDLE_TTL_MS = 15_000;
-  async function liveCandles(productId: string, limit: number): Promise<PriceCandle[]> {
-    const cached = candleCache.get(productId);
+  async function liveCandles(productId: string, granularity: CoinbaseGranularity, limit: number): Promise<ApiCandle[]> {
+    const key = `${productId}:${granularity}`;
+    const cached = candleCache.get(key);
     if (cached && Date.now() - cached.at < CANDLE_TTL_MS) return cached.candles.slice(-limit);
     try {
-      const raw = await marketData!.getCandles({ productId: productId as `${string}-${string}`, granularity: "ONE_MINUTE", limit });
-      const candles: PriceCandle[] = raw.map((c) => ({ time: c.start.getTime(), open: c.open, high: c.high, low: c.low, close: c.close }));
-      candleCache.set(productId, { at: Date.now(), candles });
+      const raw = await marketData!.getCandles({ productId: productId as `${string}-${string}`, granularity, limit });
+      const candles: ApiCandle[] = raw.map((c) => ({
+        time: c.start.getTime(),
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume
+      }));
+      candleCache.set(key, { at: Date.now(), candles });
       return candles;
     } catch (error) {
       app.log.warn({ error }, "live candle fetch failed; serving cached/empty");
@@ -238,20 +269,24 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
   });
 
   app.get("/candles", { preHandler: requireOp }, async (request) => {
-    const query = request.query as { product?: string; bucket?: string; limit?: string };
+    const query = request.query as { product?: string; bucket?: string; limit?: string; tf?: string };
     const productId = query.product ?? config.enabledProducts[0] ?? "BTC-USD";
     const limit = Math.min(300, Math.max(1, Number(query.limit ?? "60")));
+    const tf = TIMEFRAMES[query.tf ?? ""] ?? TIMEFRAMES["1m"]!;
 
-    // Live mode: real Coinbase 1-minute candles (cached briefly so a 3s dashboard
-    // poll doesn't hammer the public API). Sample mode: aggregate the agent's own
-    // market snapshots into buckets.
-    if (marketData) {
-      const candles = await liveCandles(productId, limit);
-      return CandlesResponseSchema.parse({ productId, bucketSeconds: 60, candles });
-    }
-    const bucketSeconds = Math.min(3600, Math.max(5, Number(query.bucket ?? "20")));
-    const candles = await repo!.getCandles(productId, bucketSeconds, limit);
-    return CandlesResponseSchema.parse({ productId, bucketSeconds, candles });
+    // Live mode: real Coinbase candles at the requested timeframe (cached briefly
+    // so a 3s dashboard poll doesn't hammer the public API). Sample mode:
+    // aggregate the agent's own market snapshots into buckets of the same size.
+    const candles = marketData
+      ? await liveCandles(productId, tf.granularity, limit)
+      : (await repo!.getCandles(productId, tf.seconds, limit)).map((c) => ({ ...c, volume: null as number | null }));
+
+    return CandlesResponseSchema.parse({
+      productId,
+      bucketSeconds: tf.seconds,
+      candles,
+      indicators: computeIndicatorSeries(candles.map((c) => c.close))
+    });
   });
 
   app.get("/metrics", { preHandler: requireOp }, async () => {

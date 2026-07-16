@@ -338,7 +338,21 @@ export const CandleSchema = z
     open: z.number(),
     high: z.number(),
     low: z.number(),
-    close: z.number()
+    close: z.number(),
+    // Real volume in base units (live data). Null in sample mode, which has none.
+    volume: z.number().nullable()
+  })
+  .strict();
+
+// Technical-indicator series, each aligned 1:1 to `candles` (null during warmup).
+// Computed with the same @agent/market-data functions the strategy uses, so the
+// chart provably shows the signals the bot acts on.
+export const IndicatorSeriesSchema = z
+  .object({
+    emaFast: z.array(z.number().nullable()),
+    emaSlow: z.array(z.number().nullable()),
+    macdHistogram: z.array(z.number().nullable()),
+    rsi: z.array(z.number().nullable())
   })
   .strict();
 
@@ -346,7 +360,8 @@ export const CandlesResponseSchema = z
   .object({
     productId: ProductIdSchema,
     bucketSeconds: z.number().int().positive(),
-    candles: z.array(CandleSchema).max(1000)
+    candles: z.array(CandleSchema).max(1000),
+    indicators: IndicatorSeriesSchema
   })
   .strict();
 

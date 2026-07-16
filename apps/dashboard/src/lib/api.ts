@@ -82,13 +82,26 @@ export interface Candle {
   high: number;
   low: number;
   close: number;
+  volume: number | null;
+}
+
+/** Indicator series, each aligned 1:1 to `candles` (null during warmup). */
+export interface IndicatorSeries {
+  emaFast: (number | null)[];
+  emaSlow: (number | null)[];
+  macdHistogram: (number | null)[];
+  rsi: (number | null)[];
 }
 
 export interface CandlesResponse {
   productId: string;
   bucketSeconds: number;
   candles: Candle[];
+  indicators: IndicatorSeries;
 }
+
+export const TIMEFRAMES = ["1m", "5m", "15m", "1h"] as const;
+export type Timeframe = (typeof TIMEFRAMES)[number];
 
 export interface OrderPreview {
   productId: string;

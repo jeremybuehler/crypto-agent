@@ -1,6 +1,6 @@
 "use client";
 import useSWR from "swr";
-import { fetcher, type Status, type Portfolio, type TradeList, type Metrics, type ProposalList, type CandlesResponse } from "../lib/api";
+import { fetcher, type Status, type Portfolio, type TradeList, type Metrics, type ProposalList, type CandlesResponse, type Timeframe } from "../lib/api";
 import Header from "../components/Header";
 import PortfolioPanel from "../components/PortfolioPanel";
 import LastTradePanel from "../components/LastTradePanel";
@@ -22,11 +22,10 @@ export default function Dashboard() {
   const { data: proposalList, mutate: mutateProposals } = useSWR<ProposalList>("/api/proposals", fetcher, {
     refreshInterval: POLL
   });
-  // 60s buckets: the worker writes a snapshot every ~20s (a real Claude
-  // market-context call per loop tick dominates the interval), so a bucket must
-  // span several snapshots to form a candle with a real body instead of a flat
-  // single-point dash.
-  const { data: candleData } = useSWR<CandlesResponse>("/api/candles?bucket=60&limit=60", fetcher, {
+  const [timeframe, setTimeframe] = useState<Timeframe>("1m");
+  // limit=90 keeps EMA-26/MACD/RSI warmed with room to spare, and gives the
+  // cockpit a real trading-chart amount of history to read.
+  const { data: candleData } = useSWR<CandlesResponse>(`/api/candles?tf=${timeframe}&limit=90`, fetcher, {
     refreshInterval: POLL
   });
 
@@ -56,12 +55,14 @@ export default function Dashboard() {
           <OpsPanel status={status} onMutate={() => mutateStatus()} />
         </div>
 
-        {/* Price chart with trade markers */}
+        {/* Trader cockpit: candles + EMA overlays + volume + MACD + RSI */}
         <CandleChart
           candles={candleData?.candles ?? []}
+          indicators={candleData?.indicators}
           trades={trades}
           productId={candleData?.productId ?? "BTC-USD"}
-          bucketSeconds={candleData?.bucketSeconds ?? 60}
+          timeframe={timeframe}
+          onTimeframe={setTimeframe}
         />
 
         {/* Pending approvals */}

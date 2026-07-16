@@ -70,6 +70,76 @@ export function rsi(closes: number[], period = 14): number {
   return 100 - 100 / (1 + rs);
 }
 
+/**
+ * EMA as a series aligned to the input length: `null` for bars before the seed,
+ * then one EMA value per bar. The last non-null value equals `ema(values, period)`.
+ * Used to draw a moving-average line over a candle chart.
+ */
+export function emaLine(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (values.length < period) return out;
+  const k = 2 / (period + 1);
+  let prev = sma(values.slice(0, period), period);
+  out[period - 1] = prev;
+  for (let i = period; i < values.length; i++) {
+    prev = values[i]! * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+/**
+ * MACD histogram as a series aligned to the input length. The last non-null
+ * value equals `macd(closes, fast, slow, signalPeriod).histogram`.
+ */
+export function macdHistogramLine(closes: number[], fast = 12, slow = 26, signalPeriod = 9): (number | null)[] {
+  const out: (number | null)[] = new Array(closes.length).fill(null);
+  const fastLine = emaLine(closes, fast);
+  const slowLine = emaLine(closes, slow);
+  // The MACD line exists wherever both EMAs do — a contiguous tail from `slow-1`.
+  const firstIdx = closes.findIndex((_, i) => fastLine[i] != null && slowLine[i] != null);
+  if (firstIdx < 0) return out;
+  const macdVals = closes.slice(firstIdx).map((_, j) => fastLine[firstIdx + j]! - slowLine[firstIdx + j]!);
+  const signalLine = emaLine(macdVals, signalPeriod);
+  for (let j = 0; j < macdVals.length; j++) {
+    const signal = signalLine[j];
+    if (signal != null) out[firstIdx + j] = macdVals[j]! - signal;
+  }
+  return out;
+}
+
+/**
+ * RSI (Wilder) as a series aligned to the input length. The last non-null value
+ * equals `rsi(closes, period)`.
+ */
+export function rsiLine(closes: number[], period = 14): (number | null)[] {
+  const out: (number | null)[] = new Array(closes.length).fill(null);
+  if (closes.length <= period) return out;
+  const level = (gain: number, loss: number): number => {
+    if (loss === 0 && gain === 0) return 50;
+    if (loss === 0) return 100;
+    if (gain === 0) return 0;
+    return 100 - 100 / (1 + gain / loss);
+  };
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = closes[i]! - closes[i - 1]!;
+    if (change >= 0) avgGain += change;
+    else avgLoss -= change;
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  out[period] = level(avgGain, avgLoss);
+  for (let i = period + 1; i < closes.length; i++) {
+    const change = closes[i]! - closes[i - 1]!;
+    avgGain = (avgGain * (period - 1) + (change > 0 ? change : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (change < 0 ? -change : 0)) / period;
+    out[i] = level(avgGain, avgLoss);
+  }
+  return out;
+}
+
 export interface Macd {
   macd: number;
   signal: number;

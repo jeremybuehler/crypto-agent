@@ -69,6 +69,9 @@ importers:
       '@agent/execution':
         specifier: workspace:*
         version: link:../../packages/execution
+      '@agent/market-data':
+        specifier: workspace:*
+        version: link:../../packages/market-data
       '@agent/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
