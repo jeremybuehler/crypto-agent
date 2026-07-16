@@ -11,10 +11,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @type {import('next').NextConfig}
  */
 const nextConfig = {
-  // Emit a self-contained server bundle for Docker (`.next/standalone`), traced
-  // from the monorepo root so pnpm-workspace deps are included.
-  output: "standalone",
-  outputFileTracingRoot: resolve(__dirname, "../..")
+  // Standalone output is only for the Docker image (infra/Dockerfile) — it's
+  // incompatible with `next start`, which is how Railway (Nixpacks) runs this.
+  // Opt in with NEXT_OUTPUT_STANDALONE=1 when building the Docker image.
+  ...(process.env.NEXT_OUTPUT_STANDALONE === "1"
+    ? { output: "standalone", outputFileTracingRoot: resolve(__dirname, "../..") }
+    : {})
 };
 
 export default nextConfig;
