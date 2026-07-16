@@ -187,6 +187,17 @@ Reference docs: [PRD.md](./PRD.md) · [TECH_SPEC.md](./TECH_SPEC.md) · [crypto-
   - [ ] Advice cannot produce executable orders or bypass deterministic risk
   - [ ] Behavioral evals cover unsupported claims, omitted risks, profile misuse, and prompt injection
 
+### T2.11a — Educational assistant v1 (slide-out coworker with grounded tools)
+- **Depends on:** T4.2 (operator API), dashboard
+- **Files to touch:** `apps/api/src/assistant.ts`, `packages/ai/src/assistant*.ts`, `packages/ai/src/glossary.ts`, `packages/persistence` (read-only `getTradeStory`), dashboard `ChatPane` + explain-this buttons, tests
+- **Scope:** Per [2026-07-15-educational-assistant-design.md](./plans/2026-07-15-educational-assistant-design.md) — first implemented slice of the education design. Slide-out chat pane, learner profile selector, read-only tool belt (`explain_trade`, `define_term`, `build_report_card`, `get_portfolio_state`), server-side Anthropic tool loop with deterministic no-key fallback.
+- **Acceptance:**
+  - [x] Every tool is read-only; none can reach ops, approvals, execution, or config (the `AssistantToolExecutor` interface exposes only repository reads)
+  - [x] `explain_trade` reconstructs the full causal chain for a real fill by correlation id (`getTradeStory`)
+  - [x] Missing `ANTHROPIC_API_KEY` yields structured deterministic education, never an error (`DeterministicAssistant`)
+  - [x] Operator auth required end-to-end; no secrets in prompts
+  - [x] Explain-this buttons on trades and proposals pre-load the pane with context
+
 ### T2.12 — Learned strategy/risk change proposals
 - **Depends on:** T2.9, T2.11, T2.5
 - **Files to touch:** `packages/learning/src/change-proposal.ts`, persistence repository, authenticated API routes, tests

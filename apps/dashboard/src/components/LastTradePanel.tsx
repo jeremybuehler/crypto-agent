@@ -1,13 +1,17 @@
 "use client";
 import type { Trade } from "../lib/api";
+import ExplainButton from "./ExplainButton";
 
 function fmt(n: number, d = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
-interface Props { trade: Trade | undefined; }
+interface Props {
+  trade: Trade | undefined;
+  onExplain: (correlationId: string, label: string) => void;
+}
 
-export default function LastTradePanel({ trade }: Props) {
+export default function LastTradePanel({ trade, onExplain }: Props) {
   if (!trade) {
     return (
       <div className="border border-terminal-border bg-terminal-surface p-4 flex flex-col gap-3">
@@ -27,8 +31,9 @@ export default function LastTradePanel({ trade }: Props) {
 
   return (
     <div className="border border-terminal-border bg-terminal-surface p-4 flex flex-col gap-3">
-      <div className="text-terminal-dim text-xs tracking-widest uppercase border-b border-terminal-border pb-2">
-        Last Trade
+      <div className="text-terminal-dim text-xs tracking-widest uppercase border-b border-terminal-border pb-2 flex items-center justify-between">
+        <span>Last Trade</span>
+        {trade.proposalId && <ExplainButton correlationId={trade.proposalId} label="trade" onExplain={onExplain} />}
       </div>
 
       <div className="flex items-center gap-3">

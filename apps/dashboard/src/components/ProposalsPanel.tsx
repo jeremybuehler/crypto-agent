@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { postJson, type Proposal } from "../lib/api";
+import ExplainButton from "./ExplainButton";
 
 function fmt(n: number, d = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -9,9 +10,10 @@ function fmt(n: number, d = 2) {
 interface Props {
   proposals: Proposal[];
   onDecision: () => void;
+  onExplain: (correlationId: string, label: string) => void;
 }
 
-export default function ProposalsPanel({ proposals, onDecision }: Props) {
+export default function ProposalsPanel({ proposals, onDecision, onExplain }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
 
   async function decide(p: Proposal, action: "approve" | "reject") {
@@ -62,6 +64,7 @@ export default function ProposalsPanel({ proposals, onDecision }: Props) {
               </div>
 
               <div className="flex items-center gap-2">
+                <ExplainButton correlationId={p.id} label="proposal" onExplain={onExplain} />
                 <button
                   disabled={busy === p.id}
                   onClick={() => decide(p, "approve")}

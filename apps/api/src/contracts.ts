@@ -323,7 +323,8 @@ export const FillSchema = z
     feeUsd: z.number(),
     filledAt: IsoDateTimeSchema,
     reasonCode: z.string().max(MAX_SHORT_TEXT_LEN).nullable(),
-    rationale: z.string().max(MAX_TEXT_LEN).nullable()
+    rationale: z.string().max(MAX_TEXT_LEN).nullable(),
+    proposalId: z.string().uuid().nullable()
   })
   .strict();
 

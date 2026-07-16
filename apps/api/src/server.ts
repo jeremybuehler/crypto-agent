@@ -21,6 +21,7 @@ import {
   type AlertSink
 } from "@agent/core";
 import { createOpsState, type OpsState } from "@agent/risk";
+import { AssistantAskSchema, createAssistantForApi } from "./assistant.js";
 import {
   createOperatorRepositoryForConfig,
   type FillRow,
@@ -70,7 +71,8 @@ function toFillResponse(fill: FillRow) {
     feeUsd: fill.feeUsd,
     filledAt: fill.filledAt.toISOString(),
     reasonCode: fill.reasonCode,
-    rationale: fill.rationale
+    rationale: fill.rationale,
+    proposalId: fill.proposalId
   };
 }
 
@@ -255,6 +257,20 @@ export async function buildServer(config: AgentConfig, deps: ServerDeps = {}) {
   app.get("/metrics", { preHandler: requireOp }, async () => {
     const metrics = await repo!.getMetrics();
     return MetricsResponseSchema.parse(metrics);
+  });
+
+  // Educational assistant: explains trades and concepts over a read-only tool
+  // belt. Falls back to deterministic data-only answers without an Anthropic
+  // key. Constructed lazily because `repo` is bound during onReady.
+  let assistant: ReturnType<typeof createAssistantForApi> | undefined;
+  app.post("/assistant/ask", { preHandler: requireOp }, async (request, reply) => {
+    const parsed = AssistantAskSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: { code: "INVALID_REQUEST", message: parsed.error.issues.map((i) => i.message).join("; ") } };
+    }
+    assistant ??= createAssistantForApi({ repo: repo!, config });
+    return assistant.ask(parsed.data);
   });
 
   app.get("/audit", { preHandler: requireOp }, async () => {

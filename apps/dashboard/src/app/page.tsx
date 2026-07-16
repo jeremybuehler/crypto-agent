@@ -9,7 +9,8 @@ import ProposalsPanel from "../components/ProposalsPanel";
 import CandleChart from "../components/CandleChart";
 import TradeFeed from "../components/TradeFeed";
 import RiskConfig from "../components/RiskConfig";
-import { useState, useEffect } from "react";
+import AssistantPane, { type ExplainContext } from "../components/AssistantPane";
+import { useState, useEffect, useCallback } from "react";
 
 const POLL = 3000;
 
@@ -28,6 +29,14 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   useEffect(() => { if (status) setLastUpdated(new Date()); }, [status]);
 
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [explainContext, setExplainContext] = useState<ExplainContext | null>(null);
+
+  const explain = useCallback((correlationId: string, label: string) => {
+    setExplainContext({ correlationId, label });
+    setAssistantOpen(true);
+  }, []);
+
   const trades = tradeList?.trades ?? [];
   const lastTrade = trades[0];
 
@@ -39,7 +48,7 @@ export default function Dashboard() {
         {/* Top row: 3 panels */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <PortfolioPanel portfolio={portfolio} metrics={metrics} />
-          <LastTradePanel trade={lastTrade} />
+          <LastTradePanel trade={lastTrade} onExplain={explain} />
           <OpsPanel status={status} onMutate={() => mutateStatus()} />
         </div>
 
@@ -52,10 +61,10 @@ export default function Dashboard() {
         />
 
         {/* Pending approvals */}
-        <ProposalsPanel proposals={proposalList?.proposals ?? []} onDecision={() => mutateProposals()} />
+        <ProposalsPanel proposals={proposalList?.proposals ?? []} onDecision={() => mutateProposals()} onExplain={explain} />
 
         {/* Trade feed */}
-        <TradeFeed trades={trades} />
+        <TradeFeed trades={trades} onExplain={explain} />
 
         {/* Risk config */}
         <RiskConfig status={status} />
@@ -65,6 +74,23 @@ export default function Dashboard() {
         <span>Crypto Guy v0.1 · PAPER MODE</span>
         <span>POLLS EVERY 3S</span>
       </footer>
+
+      {/* Floating launcher for the educational assistant */}
+      {!assistantOpen && (
+        <button
+          onClick={() => setAssistantOpen(true)}
+          className="fixed bottom-4 right-4 z-30 px-4 py-2 border border-terminal-blue bg-terminal-surface text-terminal-blue text-xs font-bold tracking-wider hover:bg-terminal-blue/10 shadow-lg"
+        >
+          ASK ⌵
+        </button>
+      )}
+
+      <AssistantPane
+        open={assistantOpen}
+        onClose={() => setAssistantOpen(false)}
+        context={explainContext}
+        onContextConsumed={() => setExplainContext(null)}
+      />
     </div>
   );
 }

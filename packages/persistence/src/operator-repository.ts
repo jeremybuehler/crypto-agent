@@ -159,6 +159,8 @@ export interface FillRow {
   /** Why this trade happened, from the originating trade intent. */
   reasonCode: string | null;
   rationale: string | null;
+  /** Originating proposal (null for paper auto-fills) — the trade-story anchor. */
+  proposalId: string | null;
 }
 
 export interface RealizedMetrics {
@@ -210,6 +212,56 @@ export interface IngestHeartbeatInput {
   detail?: Record<string, unknown>;
 }
 
+/**
+ * The reconstructed causal chain for one proposal — the audit trail told as a
+ * story for the educational assistant. Every section is nullable: a partial
+ * chain (e.g. an expired proposal that never executed) returns partial data
+ * with explicit gaps, never a throw. Read-only by construction.
+ */
+export interface TradeStory {
+  proposal: (StoredProposal & { executedAt: Date | null; exchangeOrderId: string | null }) | null;
+  /** The operator's approve/reject, when one was recorded. */
+  operatorDecision: { decision: "approved" | "rejected"; decidedAt: Date } | null;
+  intent: {
+    id: string;
+    productId: string;
+    side: Side;
+    quoteSizeUsd: number;
+    confidence: number;
+    reasonCode: string;
+    rationale: string;
+    createdAt: Date;
+  } | null;
+  /** All risk evaluations for the intent — intent-time and execution-time re-check. */
+  riskDecisions: Array<{
+    approved: boolean;
+    reasons: string[];
+    ruleResults: Array<{ rule: string; passed: boolean; message: string }>;
+    checkedAt: Date;
+  }>;
+  fill: {
+    productId: string;
+    side: Side;
+    quoteSizeUsd: number;
+    price: number;
+    baseSize: number;
+    feeUsd: number;
+    filledAt: Date;
+    mode: string;
+  } | null;
+  /** Nearest AI market context before the intent (linked by product + time, not FK). */
+  aiContext: {
+    marketRegime: string;
+    confidence: number;
+    doNotTrade: boolean;
+    output: Record<string, unknown>;
+    createdAt: Date;
+  } | null;
+  /** Nearest market snapshot before the intent (linked by product + time, not FK). */
+  marketSnapshot: { price: number; bid: number; ask: number; spreadBps: number; sourceTimestamp: Date } | null;
+  auditEvents: AuditEventRow[];
+}
+
 export interface OperatorRepository {
   /** Cheap connectivity probe for readiness checks. */
   ping(): Promise<boolean>;
@@ -221,6 +273,8 @@ export interface OperatorRepository {
   recordAuditEvent(event: AuditEventInput): Promise<void>;
   listAuditEvents(limit: number): Promise<AuditEventRow[]>;
   ingestHeartbeat(input: IngestHeartbeatInput): Promise<void>;
+  /** Reconstruct the causal chain for a proposal (read-only; partial chains allowed). */
+  getTradeStory(proposalId: string): Promise<TradeStory>;
   createProposal(input: CreateProposalInput): Promise<void>;
   getProposal(id: string): Promise<StoredProposal | null>;
   listProposals(limit: number, statuses?: ProposalStatus[]): Promise<StoredProposal[]>;
@@ -321,6 +375,19 @@ export function computeRealizedMetrics(fills: FillRow[]): RealizedMetrics {
 // as Date-or-string depending on driver; normalize at the boundary.
 // ---------------------------------------------------------------------------
 
+/** JSONB columns arrive parsed from pg; tolerate stringified values from other executors. */
+function jsonColumn<T>(value: unknown, fallback: T): T {
+  if (value == null) return fallback;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
+  }
+  return value as T;
+}
+
 function num(value: unknown): number {
   return typeof value === "number" ? value : Number(value);
 }
@@ -340,7 +407,8 @@ function rowToFill(row: Record<string, unknown>): FillRow {
     feeUsd: num(row.fee_usd),
     filledAt: date(row.filled_at),
     reasonCode: (row.reason_code as string | undefined) ?? null,
-    rationale: (row.rationale as string | undefined) ?? null
+    rationale: (row.rationale as string | undefined) ?? null,
+    proposalId: (row.proposal_id as string | undefined) ?? null
   };
 }
 
@@ -382,7 +450,7 @@ export class PostgresOperatorRepository implements OperatorRepository {
   async listRecentFills(limit: number): Promise<FillRow[]> {
     const result = await this.executor.query(
       `SELECT f.id, f.product_id, f.side, f.quote_size_usd, f.price, f.base_size, f.fee_usd, f.filled_at,
-              i.reason_code, i.rationale
+              f.proposal_id, i.reason_code, i.rationale
          FROM paper_fills f
          LEFT JOIN trade_intents i ON i.id = f.trade_intent_id
         ORDER BY f.filled_at DESC
@@ -574,6 +642,150 @@ export class PostgresOperatorRepository implements OperatorRepository {
         )
       : await this.executor.query("SELECT * FROM proposals ORDER BY created_at DESC LIMIT $1", [limit]);
     return result.rows.map(rowToProposal);
+  }
+
+  async getTradeStory(proposalId: string): Promise<TradeStory> {
+    const story: TradeStory = {
+      proposal: null,
+      operatorDecision: null,
+      intent: null,
+      riskDecisions: [],
+      fill: null,
+      aiContext: null,
+      marketSnapshot: null,
+      auditEvents: []
+    };
+
+    const proposalResult = await this.executor.query("SELECT * FROM proposals WHERE id = $1", [proposalId]);
+    const proposalRow = proposalResult.rows[0];
+    if (proposalRow) {
+      story.proposal = {
+        ...rowToProposal(proposalRow),
+        executedAt: proposalRow.executed_at ? date(proposalRow.executed_at) : null,
+        exchangeOrderId: (proposalRow.exchange_order_id as string | null) ?? null
+      };
+    }
+
+    const decisionResult = await this.executor.query(
+      "SELECT decision, decided_at FROM proposal_decisions WHERE proposal_id = $1",
+      [proposalId]
+    );
+    const decisionRow = decisionResult.rows[0];
+    if (decisionRow) {
+      story.operatorDecision = {
+        decision: decisionRow.decision as "approved" | "rejected",
+        decidedAt: date(decisionRow.decided_at)
+      };
+    }
+
+    const intentId = proposalRow?.trade_intent_id as string | null | undefined;
+    if (intentId) {
+      const intentResult = await this.executor.query("SELECT * FROM trade_intents WHERE id = $1", [intentId]);
+      const intentRow = intentResult.rows[0];
+      if (intentRow) {
+        story.intent = {
+          id: intentRow.id as string,
+          productId: intentRow.product_id as string,
+          side: intentRow.side as Side,
+          quoteSizeUsd: num(intentRow.quote_size_usd),
+          confidence: num(intentRow.confidence),
+          reasonCode: intentRow.reason_code as string,
+          rationale: intentRow.rationale as string,
+          createdAt: date(intentRow.created_at)
+        };
+      }
+
+      const riskResult = await this.executor.query(
+        "SELECT approved, reasons, rule_results, checked_at FROM risk_decisions WHERE trade_intent_id = $1 ORDER BY checked_at ASC",
+        [intentId]
+      );
+      story.riskDecisions = riskResult.rows.map((row) => ({
+        approved: row.approved as boolean,
+        reasons: jsonColumn<string[]>(row.reasons, []),
+        ruleResults: jsonColumn<Array<{ rule: string; passed: boolean; message: string }>>(row.rule_results, []),
+        checkedAt: date(row.checked_at)
+      }));
+    }
+
+    const fillResult = await this.executor.query(
+      "SELECT product_id, side, quote_size_usd, price, base_size, fee_usd, filled_at, mode FROM paper_fills WHERE proposal_id = $1 ORDER BY filled_at DESC LIMIT 1",
+      [proposalId]
+    );
+    const fillRow = fillResult.rows[0];
+    if (fillRow) {
+      story.fill = {
+        productId: fillRow.product_id as string,
+        side: fillRow.side as Side,
+        quoteSizeUsd: num(fillRow.quote_size_usd),
+        price: num(fillRow.price),
+        baseSize: num(fillRow.base_size),
+        feeUsd: num(fillRow.fee_usd),
+        filledAt: date(fillRow.filled_at),
+        mode: fillRow.mode as string
+      };
+    }
+
+    // AI context and market snapshot have no FK to the intent — join by product
+    // and nearest-before time. Anchor on the intent when it exists, else the
+    // proposal, so orphaned proposals still get market context.
+    const anchorProduct = story.intent?.productId ?? story.proposal?.preview.productId;
+    const anchorAt = story.intent?.createdAt ?? story.proposal?.createdAt;
+    if (anchorProduct && anchorAt) {
+      const contextResult = await this.executor.query(
+        `SELECT market_regime, confidence, do_not_trade, output_json, created_at
+           FROM ai_contexts WHERE product_id = $1 AND created_at <= $2
+          ORDER BY created_at DESC LIMIT 1`,
+        [anchorProduct, anchorAt]
+      );
+      const contextRow = contextResult.rows[0];
+      if (contextRow) {
+        story.aiContext = {
+          marketRegime: contextRow.market_regime as string,
+          confidence: num(contextRow.confidence),
+          doNotTrade: contextRow.do_not_trade as boolean,
+          output: jsonColumn<Record<string, unknown>>(contextRow.output_json, {}),
+          createdAt: date(contextRow.created_at)
+        };
+      }
+
+      const snapshotResult = await this.executor.query(
+        `SELECT price, bid, ask, spread_bps, source_timestamp
+           FROM market_snapshots WHERE product_id = $1 AND created_at <= $2
+          ORDER BY created_at DESC LIMIT 1`,
+        [anchorProduct, anchorAt]
+      );
+      const snapshotRow = snapshotResult.rows[0];
+      if (snapshotRow) {
+        story.marketSnapshot = {
+          price: num(snapshotRow.price),
+          bid: num(snapshotRow.bid),
+          ask: num(snapshotRow.ask),
+          spreadBps: num(snapshotRow.spread_bps),
+          sourceTimestamp: date(snapshotRow.source_timestamp)
+        };
+      }
+    }
+
+    const auditResult = await this.executor.query(
+      `SELECT id, type, actor, correlation_id, occurred_at, summary, metadata
+         FROM audit_events WHERE correlation_id = $1
+        ORDER BY occurred_at ASC LIMIT 50`,
+      [proposalId]
+    );
+    story.auditEvents = auditResult.rows.map((row) => {
+      const event: AuditEventRow = {
+        id: row.id as string,
+        type: row.type as string,
+        actor: row.actor as AuditEventInput["actor"],
+        correlationId: row.correlation_id as string,
+        occurredAt: date(row.occurred_at),
+        summary: row.summary as string
+      };
+      if (row.metadata != null) event.metadata = row.metadata as Record<string, unknown>;
+      return event;
+    });
+
+    return story;
   }
 
   async decideProposal(input: DecideProposalInput): Promise<DecisionResult> {
@@ -931,6 +1143,23 @@ export class InMemoryOperatorRepository implements OperatorRepository {
     return { ok: true, status: input.decision, decidedAt: input.now };
   }
 
+  async getTradeStory(proposalId: string): Promise<TradeStory> {
+    // In-memory keeps only proposals and audit events; the worker pipeline
+    // tables (intents, risk decisions, contexts) live in Postgres. Partial
+    // stories are the contract, so hermetic API tests still exercise the shape.
+    const proposal = this.proposals.get(proposalId) ?? null;
+    return {
+      proposal: proposal ? { ...proposal, executedAt: null, exchangeOrderId: null } : null,
+      operatorDecision: null,
+      intent: null,
+      riskDecisions: [],
+      fill: null,
+      aiContext: null,
+      marketSnapshot: null,
+      auditEvents: this.audit.filter((event) => event.correlationId === proposalId)
+    };
+  }
+
   async claimNextApprovedProposal(now: Date): Promise<ClaimedProposal | null> {
     const approved = [...this.proposals.values()]
       .filter((p) => p.status === "approved")
@@ -964,6 +1193,7 @@ export class InMemoryOperatorRepository implements OperatorRepository {
         baseSize: f.baseSize,
         feeUsd: f.feeUsd,
         filledAt: f.filledAt,
+        proposalId: f.proposalId,
         reasonCode: null,
         rationale: null
       });

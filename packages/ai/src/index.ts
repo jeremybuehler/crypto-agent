@@ -27,6 +27,8 @@ export interface AIContextProvider {
 
 export { ClaudeAIContextProvider } from "./claude-provider.js";
 export * from "./advice.js";
+export * from "./assistant.js";
+export * from "./glossary.js";
 
 export class ConservativeStubAIContextProvider implements AIContextProvider {
   async generateContext(input: AIContextInput): Promise<AIContext> {

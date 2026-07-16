@@ -40,6 +40,27 @@ export interface Trade {
   filledAt: string;
   reasonCode: string | null;
   rationale: string | null;
+  proposalId: string | null;
+}
+
+export interface Learner {
+  id: string;
+  name: string;
+  level: "beginner" | "intermediate" | "advanced";
+}
+
+export interface AssistantAnswer {
+  answer: string;
+  toolsUsed: string[];
+  fallback: boolean;
+}
+
+export async function askAssistant(
+  question: string,
+  learner: Learner,
+  correlationId?: string
+): Promise<AssistantAnswer> {
+  return postJson("/assistant/ask", { question, learner, ...(correlationId ? { correlationId } : {}) });
 }
 
 export interface TradeList {

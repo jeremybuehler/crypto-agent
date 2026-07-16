@@ -1,5 +1,6 @@
 "use client";
 import type { Trade } from "../lib/api";
+import ExplainButton from "./ExplainButton";
 
 function fmt(n: number, d = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -9,9 +10,12 @@ function reason(t: { reasonCode: string | null }) {
   return (t.reasonCode ?? "—").replace(/_/g, " ");
 }
 
-interface Props { trades: Trade[]; }
+interface Props {
+  trades: Trade[];
+  onExplain: (correlationId: string, label: string) => void;
+}
 
-export default function TradeFeed({ trades }: Props) {
+export default function TradeFeed({ trades, onExplain }: Props) {
   return (
     <div className="border border-terminal-border bg-terminal-surface flex flex-col">
       <div className="text-terminal-dim text-xs tracking-widest uppercase border-b border-terminal-border px-4 py-2 flex items-center justify-between">
@@ -35,6 +39,7 @@ export default function TradeFeed({ trades }: Props) {
                 <th className="text-right px-2 py-1 font-normal">PRICE</th>
                 <th className="text-right px-2 py-1 font-normal hidden lg:table-cell">FEE</th>
                 <th className="text-left px-4 py-1 font-normal hidden md:table-cell">WHY</th>
+                <th className="text-right px-2 py-1 font-normal"></th>
               </tr>
             </thead>
             <tbody>
@@ -58,6 +63,9 @@ export default function TradeFeed({ trades }: Props) {
                   </td>
                   <td className="px-4 py-1.5 text-terminal-dim hidden md:table-cell whitespace-nowrap" title={t.rationale ?? undefined}>
                     {reason(t)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                    {t.proposalId && <ExplainButton correlationId={t.proposalId} label="trade" onExplain={onExplain} />}
                   </td>
                 </tr>
               ))}
