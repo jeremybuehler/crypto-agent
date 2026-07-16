@@ -22,10 +22,16 @@ export default function OpsPanel({ status, onMutate }: Props) {
   const killSwitch = status?.killSwitchEnabled ?? false;
   const isLive = status?.mode === "live";
 
+  const mode = status?.mode?.toUpperCase() ?? "—";
+  const modeColor = isLive ? "text-terminal-red border-terminal-red" : "text-terminal-blue border-terminal-blue";
+
   return (
-    <div className="border border-terminal-border bg-terminal-surface p-4 flex flex-col gap-3">
-      <div className="text-terminal-dim text-xs tracking-widest uppercase border-b border-terminal-border pb-2">
-        Ops Control
+    // self-start so the card sizes to its content instead of stretching to match
+    // the taller Portfolio / Last-Trade cards in the same grid row.
+    <div className="border border-terminal-border bg-terminal-surface p-4 flex flex-col gap-3 self-start">
+      <div className="text-terminal-dim text-xs tracking-widest uppercase border-b border-terminal-border pb-2 flex items-center justify-between">
+        <span>Ops Control</span>
+        <span className={`px-1.5 py-0.5 border text-[10px] tracking-wider ${modeColor}`}>{mode}</span>
       </div>
 
       <div className="flex flex-col gap-2">
