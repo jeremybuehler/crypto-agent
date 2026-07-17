@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Candle, IndicatorSeries, Timeframe, Trade } from "../lib/api";
 import { TIMEFRAMES } from "../lib/api";
 
@@ -36,22 +36,42 @@ interface Props {
 }
 
 export default function CandleChart({ candles, indicators, trades, productId, timeframe, onTimeframe }: Props) {
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const roRef = useRef<ResizeObserver | null>(null);
   // Start small so the first paint never renders an over-wide SVG that overflows
-  // its container on mobile (the ResizeObserver corrects it to the true width).
+  // its container on mobile; the callback ref below sizes it to the container.
   const [width, setWidth] = useState(320);
   const [hover, setHover] = useState<number | null>(null);
 
-  useEffect(() => {
-    const el = wrapRef.current;
+  // Callback ref (not a mount-only effect): the chart shows a loading branch
+  // first and the real chart element mounts later, so a `useEffect([])` would
+  // attach to nothing and never re-run. This fires whenever the chart wrapper
+  // actually mounts/unmounts, measuring it and observing size changes.
+  const attachWrap = useCallback((el: HTMLDivElement | null) => {
+    wrapRef.current = el;
+    roRef.current?.disconnect();
+    roRef.current = null;
     if (!el) return;
-    setWidth(el.clientWidth);
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width;
-      if (w && w > 0) setWidth(w);
-    });
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w > 0) setWidth(w);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
+    roRef.current = ro;
+  }, []);
+
+  // Reliable fallback for resize / orientation change: the window resize event
+  // always fires, and reads the live wrapper each time (so it works even though
+  // the wrapper mounts after this effect). Belt-and-suspenders with the observer.
+  useEffect(() => {
+    const onResize = () => {
+      const el = wrapRef.current;
+      if (el && el.clientWidth > 0) setWidth(el.clientWidth);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   if (candles.length < 2 || !indicators) {
@@ -116,7 +136,7 @@ export default function CandleChart({ candles, indicators, trades, productId, ti
     <div className="border border-terminal-border bg-terminal-surface flex flex-col">
       <ChartHeader productId={productId} timeframe={timeframe} onTimeframe={onTimeframe} last={last} hovered={hovered} />
 
-      <div ref={wrapRef} className="relative w-full overflow-hidden" style={{ height: TOTAL_H }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+      <div ref={attachWrap} className="relative w-full overflow-hidden" style={{ height: TOTAL_H }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
         <svg width={width} height={TOTAL_H} className="block" shapeRendering="crispEdges">
           {/* Panel labels */}
           <PanelLabel y={priceTop} text={`${productId}  EMA12`} color={BLUE} extra="EMA26" extraColor={AMBER} />
