@@ -37,7 +37,9 @@ interface Props {
 
 export default function CandleChart({ candles, indicators, trades, productId, timeframe, onTimeframe }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(1000);
+  // Start small so the first paint never renders an over-wide SVG that overflows
+  // its container on mobile (the ResizeObserver corrects it to the true width).
+  const [width, setWidth] = useState(320);
   const [hover, setHover] = useState<number | null>(null);
 
   useEffect(() => {
@@ -114,7 +116,7 @@ export default function CandleChart({ candles, indicators, trades, productId, ti
     <div className="border border-terminal-border bg-terminal-surface flex flex-col">
       <ChartHeader productId={productId} timeframe={timeframe} onTimeframe={onTimeframe} last={last} hovered={hovered} />
 
-      <div ref={wrapRef} className="relative w-full" style={{ height: TOTAL_H }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+      <div ref={wrapRef} className="relative w-full overflow-hidden" style={{ height: TOTAL_H }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
         <svg width={width} height={TOTAL_H} className="block" shapeRendering="crispEdges">
           {/* Panel labels */}
           <PanelLabel y={priceTop} text={`${productId}  EMA12`} color={BLUE} extra="EMA26" extraColor={AMBER} />

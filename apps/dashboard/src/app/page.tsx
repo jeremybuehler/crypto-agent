@@ -49,7 +49,7 @@ export default function Dashboard() {
   const lastTrade = trades[0];
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col overflow-x-hidden">
       <Header status={status} lastUpdated={lastUpdated} />
 
       <main className="flex-1 p-3 sm:p-4 flex flex-col gap-3">

@@ -23,7 +23,7 @@ export default function TradeFeed({ trades, onExplain }: Props) {
         <span className="text-terminal-dim">{trades.length} fills</span>
       </div>
 
-      <div className="overflow-y-auto max-h-48 sm:max-h-56">
+      <div className="overflow-auto max-h-48 sm:max-h-56">
         {trades.length === 0 ? (
           <div className="px-4 py-6 text-terminal-dim text-xs text-center">
             AWAITING FILLS<span className="blink ml-1">▌</span>
