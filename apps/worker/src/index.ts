@@ -28,11 +28,47 @@ import {
   type ClaimedProposal,
   type OperatorRepository
 } from "@agent/persistence";
-import { evaluateRisk } from "@agent/risk";
+import { createOpsState, evaluateRisk, type OpsState } from "@agent/risk";
 import { createStrategy, runStrategy } from "@agent/strategy";
 
 const config = loadConfig();
 const persistence = createPersistenceRepository(config.persistence);
+
+// Shared with the API via Redis when REDIS_URL is set (InMemoryOpsState otherwise).
+// Operator kill/pause must be consulted every tick — never hard-coded false.
+let opsState: OpsState | null = null;
+
+async function ensureOpsState(): Promise<OpsState> {
+  if (!opsState) {
+    opsState = await createOpsState(config.redisUrl);
+  }
+  return opsState;
+}
+
+/** Test seam: inject a shared InMemoryOpsState (or mock) so kill/pause can be asserted. */
+export function setOpsStateForTests(state: OpsState): void {
+  opsState = state;
+}
+
+/** Test seam: drop the injected/created ops state so the next call recreates it. */
+export function resetOpsStateForTests(): void {
+  opsState = null;
+}
+
+/**
+ * Read kill/pause from ops state. Returns `"unreachable"` on any read failure so
+ * callers can fail closed (especially outside paper mode).
+ */
+async function readOpsFlags(): Promise<{ killSwitchEnabled: boolean; paused: boolean } | "unreachable"> {
+  try {
+    const ops = await ensureOpsState();
+    const [killSwitchEnabled, paused] = await Promise.all([ops.getKillSwitchEnabled(), ops.getPaused()]);
+    return { killSwitchEnabled, paused };
+  } catch (error) {
+    logger.error({ error }, "Ops state unreachable.");
+    return "unreachable";
+  }
+}
 
 // Non-paper modes execute approved proposals against the real Coinbase API, so
 // the worker owns an operator repository (to claim/mark proposals) and a signed
@@ -111,6 +147,9 @@ function latestTradeMarker(): Date | undefined {
  * Run one trading loop, then report a heartbeat with the resulting portfolio.
  * The heartbeat is the worker's durable liveness + portfolio signal; a loop
  * failure still reports a `degraded` heartbeat before rethrowing.
+ *
+ * Operator kill switch and pause are checked at the top of every tick so an API
+ * engagement halts proposing and executing within one loop iteration (PRD U3).
  */
 export async function runOnce(portfolio: PortfolioState = initialPortfolio): Promise<PortfolioState> {
   if (circuitBreakerReason) {
@@ -118,6 +157,27 @@ export async function runOnce(portfolio: PortfolioState = initialPortfolio): Pro
     await postHeartbeat(portfolio, "degraded");
     return portfolio;
   }
+
+  const opsFlags = await readOpsFlags();
+  if (opsFlags === "unreachable") {
+    // Fail closed on control-plane loss outside paper; paper also halts when
+    // Redis was configured and became unreachable (never trade blind to ops).
+    logger.error(
+      { tradingMode: config.tradingMode },
+      "Ops state unreachable; refusing to trade until ops is readable again."
+    );
+    await postHeartbeat(portfolio, "degraded");
+    return portfolio;
+  }
+  if (opsFlags.killSwitchEnabled || opsFlags.paused) {
+    logger.warn(
+      { killSwitchEnabled: opsFlags.killSwitchEnabled, paused: opsFlags.paused },
+      "Trading halted by operator kill switch or pause; skipping tick."
+    );
+    await postHeartbeat(portfolio, "degraded");
+    return portfolio;
+  }
+
   try {
     // Drain operator-approved proposals into real fills BEFORE generating new
     // intents, so risk/exposure downstream reflects what we just executed.
@@ -223,12 +283,19 @@ async function runTradingLoop(portfolio: PortfolioState): Promise<PortfolioState
   }
   await persistence.saveTradeIntent(intent);
 
+  // Defense in depth: re-read kill/pause at risk time (not just tick start).
+  const opsFlags = await readOpsFlags();
+  if (opsFlags === "unreachable" || opsFlags.paused) {
+    logger.warn({ opsFlags }, "Ops unreachable or paused during intent generation; skipping trade.");
+    return portfolio;
+  }
+
   const spacingMarker = latestTradeMarker();
   const decision = evaluateRisk({
     config,
     intent,
     portfolio,
-    killSwitchEnabled: false,
+    killSwitchEnabled: opsFlags.killSwitchEnabled,
     ...(spacingMarker ? { lastTradeAt: spacingMarker } : {})
   });
   await persistence.saveRiskDecision(decision);
@@ -386,6 +453,17 @@ async function executeApprovedProposals(portfolio: PortfolioState): Promise<Port
 
   let current = portfolio;
   for (let i = 0; i < MAX_EXECUTIONS_PER_TICK; i++) {
+    // Honor kill/pause within the drain loop so an operator engagement mid-tick
+    // stops further claims/placements (PRD: halt within one loop tick).
+    const opsFlags = await readOpsFlags();
+    if (opsFlags === "unreachable" || opsFlags.killSwitchEnabled || opsFlags.paused) {
+      logger.warn(
+        { opsFlags },
+        "Skipping further approved-proposal execution due to kill switch, pause, or unreachable ops state."
+      );
+      break;
+    }
+
     const claimed = await operatorRepo.claimNextApprovedProposal(new Date());
     if (!claimed) break;
 
@@ -412,7 +490,7 @@ async function executeApprovedProposals(portfolio: PortfolioState): Promise<Port
       config,
       intent: previewToIntent(claimed),
       portfolio: current,
-      killSwitchEnabled: false,
+      killSwitchEnabled: opsFlags.killSwitchEnabled,
       ...(lastFillAt ? { lastTradeAt: lastFillAt } : {})
     });
     if (!decision.approved) {
@@ -694,7 +772,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function loadMarketInputs(productId: `${string}-${string}`): Promise<{ market: MarketSnapshot; candles: Candle[] }> {
+/**
+ * Load market snapshot + candles. Sample sine-wave data is used ONLY when
+ * `USE_SAMPLE_MARKET_DATA=true`. On Coinbase public MD failure we fail closed:
+ * alert, never invent prices, and let the caller skip the tick / degrade.
+ */
+export async function loadMarketInputs(
+  productId: `${string}-${string}`
+): Promise<{ market: MarketSnapshot; candles: Candle[] }> {
   if (config.coinbase.useSampleMarketData) {
     return sampleMarketInputs(productId);
   }
@@ -713,8 +798,19 @@ async function loadMarketInputs(productId: `${string}-${string}`): Promise<{ mar
 
     return { market, candles };
   } catch (error) {
-    logger.warn({ error, productId }, "Falling back to sample market data after Coinbase public market-data failure.");
-    return sampleMarketInputs(productId);
+    logger.error(
+      { error, productId },
+      "Coinbase public market-data failure; refusing to invent sample prices (fail closed)."
+    );
+    await alerts.dispatch({
+      id: `market_data_failure:${productId}:${new Date().toISOString().slice(0, 13)}`,
+      kind: "market_data_failure",
+      severity: "warning",
+      summary: `Market data unavailable for ${productId}; trading tick skipped (fail closed).`,
+      at: new Date(),
+      metadata: { productId }
+    });
+    throw error instanceof Error ? error : new Error("Market data unavailable.");
   }
 }
 
@@ -767,8 +863,11 @@ function sampleMarketInputs(productId: `${string}-${string}`): { market: MarketS
 if (import.meta.url === `file://${process.argv[1]}`) {
   // `--once` forces a single run even when WORKER_LOOP_MS is configured.
   const loopMs = process.argv.includes("--once") ? 0 : Number(process.env.WORKER_LOOP_MS ?? "0");
+  let ownedOps: OpsState | null = null;
   try {
     await persistence.migrate();
+    // Eagerly open ops state so Redis kill/pause is available on the first tick.
+    ownedOps = await ensureOpsState();
     if (loopMs > 0) {
       // Continuous mode: carry portfolio state across iterations so equity,
       // positions, and realized PnL evolve. Ctrl-C / SIGTERM to stop.
@@ -792,6 +891,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     logger.error({ error }, "Worker failed.");
     process.exitCode = 1;
   } finally {
+    await ownedOps?.close();
     await persistence.close();
     if (operatorRepo) await operatorRepo.close();
   }
