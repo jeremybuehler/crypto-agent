@@ -56,6 +56,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   worker.resetCircuitBreakerForTests();
+  worker.resetOpsStateForTests();
   vi.unstubAllGlobals();
   delete process.env.AGENT_API_URL;
 });

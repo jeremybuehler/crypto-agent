@@ -27,7 +27,9 @@ beforeAll(async () => {
   ({ postHeartbeat } = await import("../apps/worker/src/index.js"));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const { resetOpsStateForTests } = await import("../apps/worker/src/index.js");
+  resetOpsStateForTests();
   vi.unstubAllGlobals();
   delete process.env.AGENT_API_URL;
 });
